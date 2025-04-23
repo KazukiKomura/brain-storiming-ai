@@ -21,6 +21,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import StickyNote from "@/components/sticky-note"
 import ColorPalette from "@/components/color-palette"
 import html2canvas from "html2canvas"
+import { notesApi } from "@/lib/api"
 
 // 付箋のタイプ定義
 export type Note = {
@@ -29,17 +30,61 @@ export type Note = {
   position: { x: number; y: number }
   color: string
   zIndex: number
+  gridPosition?: { row: number; col: number } // グリッドでの位置を追加
+  finishEditing?: boolean // 編集終了フラグを追加
 }
 
 // 利用可能な付箋の色
 export const COLORS = {
   yellow: "bg-yellow-200 hover:bg-yellow-300",
   orange: "bg-orange-200 hover:bg-orange-300",
+  red: "bg-red-200 hover:bg-red-300",
+  pink: "bg-pink-200 hover:bg-pink-300",
   green: "bg-green-200 hover:bg-green-300",
+  teal: "bg-teal-200 hover:bg-teal-300",
   blue: "bg-blue-200 hover:bg-blue-300",
+  indigo: "bg-indigo-200 hover:bg-indigo-300",
   purple: "bg-purple-200 hover:bg-purple-300",
   white: "bg-white hover:bg-gray-100",
 }
+
+// 色ごとの列を定義
+export const COLOR_COLUMNS = {
+  yellow: 0,
+  orange: 1,
+  red: 2,
+  pink: 3,
+  green: 4,
+  teal: 5,
+  blue: 6,
+  indigo: 7,
+  purple: 8,
+  white: 9,
+}
+
+// グリッドのサイズ
+const GRID_SIZE = 180; // より大きいセルサイズ（ピクセル）
+const GRID_COLS = 15; // 列数
+const GRID_ROWS = 15; // 行数
+
+// 色とグリッド列の関係を再定義（各列に色を割り当て）
+export const GRID_COLORS: Record<number, string> = {
+  0: "yellow",
+  1: "orange", 
+  2: "red",
+  3: "pink",
+  4: "green",
+  5: "teal",
+  6: "blue",
+  7: "indigo",
+  8: "purple",
+  9: "white",
+  10: "yellow",
+  11: "orange",
+  12: "green",
+  13: "blue",
+  14: "purple",
+};
 
 // お題のリスト
 const TOPICS = [
@@ -99,9 +144,13 @@ const AI_COLOR_GROUPS = {
   技術: "blue",
   社会: "yellow",
   経済: "green",
-  環境: "orange",
+  環境: "teal",
   教育: "purple",
   健康: "white",
+  政治: "red",
+  文化: "pink",
+  科学: "indigo",
+  生活: "orange",
 }
 
 // ゲームの状態を表す型
@@ -120,8 +169,81 @@ export default function CollaborativeCanvas() {
   const [gameState, setGameState] = useState<GameState>("idle")
   const [turnMessage, setTurnMessage] = useState<string>("")
   const [turnCount, setTurnCount] = useState<number>(0)
+  const [gridCells, setGridCells] = useState<Array<Array<boolean>>>(
+    Array(GRID_ROWS).fill(0).map(() => Array(GRID_COLS).fill(false))
+  ) // グリッドのセルの占有状態を管理
+  const [viewportInfo, setViewportInfo] = useState({
+    x: 0,
+    y: 0,
+    width: 0,
+    height: 0,
+    totalWidth: GRID_COLS * GRID_SIZE,
+    totalHeight: GRID_ROWS * GRID_SIZE
+  })
   const canvasRef = useRef<HTMLDivElement>(null)
+  const canvasWrapperRef = useRef<HTMLDivElement>(null)
   const userIdInputRef = useRef<HTMLInputElement>(null)
+
+  // ビューポート情報の更新
+  const updateViewportInfo = () => {
+    if (canvasWrapperRef.current && canvasRef.current) {
+      const wrapper = canvasWrapperRef.current
+      const canvas = canvasRef.current
+      
+      setViewportInfo({
+        x: wrapper.scrollLeft,
+        y: wrapper.scrollTop,
+        width: wrapper.clientWidth,
+        height: wrapper.clientHeight,
+        totalWidth: canvas.scrollWidth,
+        totalHeight: canvas.scrollHeight
+      })
+    }
+  }
+
+  // スクロール時にビューポート情報更新
+  useEffect(() => {
+    const wrapper = canvasWrapperRef.current
+    if (wrapper) {
+      wrapper.addEventListener('scroll', updateViewportInfo)
+      window.addEventListener('resize', updateViewportInfo)
+      
+      // 初期更新
+      updateViewportInfo()
+      
+      return () => {
+        wrapper.removeEventListener('scroll', updateViewportInfo)
+        window.removeEventListener('resize', updateViewportInfo)
+      }
+    }
+  }, [])
+  
+  // 指定した位置にスクロール
+  const scrollToPosition = (x: number, y: number) => {
+    if (canvasWrapperRef.current) {
+      canvasWrapperRef.current.scrollTo({
+        left: x,
+        top: y,
+        behavior: 'smooth'
+      })
+    }
+  }
+
+  // ミニマップでのクリック処理
+  const handleMinimapClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+    
+    // ミニマップの位置をキャンバス座標に変換
+    const ratioX = viewportInfo.totalWidth / rect.width
+    const ratioY = viewportInfo.totalHeight / rect.height
+    
+    const targetX = x * ratioX - (viewportInfo.width / 2)
+    const targetY = y * ratioY - (viewportInfo.height / 2)
+    
+    scrollToPosition(targetX, targetY)
+  }
 
   // ゲームを開始する
   const startGame = () => {
@@ -173,19 +295,15 @@ export default function CollaborativeCanvas() {
       await new Promise((resolve) => setTimeout(resolve, 1500))
 
       if (canvasRef.current) {
-        const rect = canvasRef.current.getBoundingClientRect()
-        const width = rect.width
-        const height = rect.height
-
         // 1〜2個のランダムな付箋を生成
         const numNotes = Math.floor(Math.random() * 2) + 1
         const newNotes: Note[] = []
 
-        for (let i = 0; i < numNotes; i++) {
-          // ランダムな位置を生成
-          const x = Math.random() * (width - 200) + 50
-          const y = Math.random() * (height - 200) + 50
+        // グリッドの左上を優先するために行と列のインデックスを準備
+        const allRows = Array.from({ length: GRID_ROWS }, (_, i) => i);
+        const allCols = Array.from({ length: GRID_COLS }, (_, i) => i);
 
+        for (let i = 0; i < numNotes; i++) {
           // 現在のお題に関連するコンテンツを選択
           let content = "AIのアイデア"
           if (AI_GENERATED_CONTENTS[currentTopic as keyof typeof AI_GENERATED_CONTENTS]) {
@@ -202,18 +320,91 @@ export default function CollaborativeCanvas() {
               break
             }
           }
+          
+          // 空いているセルを探す - 左上から優先的に探索
+          let foundCell = false;
+          
+          // 色に対応する列を見つける
+          const possibleCols = Object.entries(GRID_COLORS)
+            .filter(([_, colorName]) => colorName === color)
+            .map(([colIndex]) => parseInt(colIndex))
+          
+          if (possibleCols.length === 0) continue;
+          
+          // まず左上のセルを優先的に確認
+          // 行は0から順に (上から下へ)
+          for (let row = 0; row < GRID_ROWS && !foundCell; row++) {
+            // 優先的に左側の列から探索
+            for (let colIdx = 0; colIdx < possibleCols.length && !foundCell; colIdx++) {
+              const col = possibleCols[colIdx];
+              
+              // セルが空いているかチェック
+              if (!gridCells[row][col]) {
+                foundCell = true;
+                
+                // 実際の座標を計算（グリッドのセルの中央に配置）
+                const posX = col * GRID_SIZE + (GRID_SIZE - 150) / 2
+                const posY = row * GRID_SIZE + (GRID_SIZE - 150) / 2
 
-          newNotes.push({
-            id: `ai-${Date.now()}-${i}`,
-            content,
-            position: { x, y },
-            color,
-            zIndex: highestZIndex + i + 1,
-          })
+                newNotes.push({
+                  id: `ai-${Date.now()}-${i}`,
+                  content,
+                  position: { x: posX, y: posY },
+                  color,
+                  zIndex: highestZIndex + i + 1,
+                  gridPosition: { row, col }
+                })
+
+                // グリッドの占有状態を更新
+                const newGridCells = [...gridCells]
+                newGridCells[row][col] = true
+                setGridCells(newGridCells)
+                
+                break; // 空きセルが見つかったらこの列の探索を終了
+              }
+            }
+            if (foundCell) break; // 空きセルが見つかったら行の探索も終了
+          }
+          
+          // それでも見つからない場合のバックアップとして、他の空きセルも探す
+          if (!foundCell) {
+            // 残りのどこかに空きがあるか試行
+            for (let row = 0; row < GRID_ROWS && !foundCell; row++) {
+              for (let col = 0; col < GRID_COLS && !foundCell; col++) {
+                // 対応する色の列かチェック
+                if (!possibleCols.includes(col)) continue;
+                
+                // セルが空いているかチェック
+                if (!gridCells[row][col]) {
+                  foundCell = true;
+                  
+                  // 実際の座標を計算
+                  const posX = col * GRID_SIZE + (GRID_SIZE - 150) / 2
+                  const posY = row * GRID_SIZE + (GRID_SIZE - 150) / 2
+
+                  newNotes.push({
+                    id: `ai-${Date.now()}-${i}`,
+                    content,
+                    position: { x: posX, y: posY },
+                    color,
+                    zIndex: highestZIndex + i + 1,
+                    gridPosition: { row, col }
+                  })
+
+                  // グリッドの占有状態を更新
+                  const newGridCells = [...gridCells]
+                  newGridCells[row][col] = true
+                  setGridCells(newGridCells)
+                  break;
+                }
+              }
+              if (foundCell) break;
+            }
+          }
         }
 
         setNotes([...notes, ...newNotes])
-        setHighestZIndex(highestZIndex + numNotes)
+        setHighestZIndex(highestZIndex + newNotes.length)
       }
     } catch (error) {
       console.error("AIターンエラー:", error)
@@ -238,44 +429,112 @@ export default function CollaborativeCanvas() {
 
     // キャンバス上の位置を取得
     if (canvasRef.current) {
-      let x, y
+      let clientX, clientY
 
       if ("touches" in e) {
         // タッチイベントの場合
         const touch = e.touches[0]
-        const rect = canvasRef.current.getBoundingClientRect()
-        x = touch.clientX - rect.left
-        y = touch.clientY - rect.top
+        clientX = touch.clientX
+        clientY = touch.clientY
       } else {
         // マウスイベントの場合
-        const rect = canvasRef.current.getBoundingClientRect()
-        x = e.clientX - rect.left
-        y = e.clientY - rect.top
+        clientX = e.clientX
+        clientY = e.clientY
       }
 
-      // クリックした場所が既存の付箋の上でなければ新しい付箋を追加
-      if (e.target === e.currentTarget) {
-        const newNote: Note = {
-          id: `user-${Date.now()}`,
-          content: "",
-          position: { x, y },
-          color: selectedColor,
-          zIndex: highestZIndex + 1,
+      const rect = canvasRef.current.getBoundingClientRect()
+      const x = clientX - rect.left + canvasWrapperRef.current!.scrollLeft
+      const y = clientY - rect.top + canvasWrapperRef.current!.scrollTop
+
+      // クリックしたグリッドのセルを計算
+      const col = Math.floor(x / GRID_SIZE)
+      const row = Math.floor(y / GRID_SIZE)
+
+      // グリッドの範囲内であることを確認
+      if (row >= 0 && row < GRID_ROWS && col >= 0 && col < GRID_COLS) {
+        // クリックしたグリッドが空いているかを確認
+        if (!gridCells[row][col]) {
+          // グリッドの列に対応する色を取得
+          const colorForColumn = GRID_COLORS[col]
+          
+          // 実際の座標を計算（グリッドのセルの中央に配置）
+          const posX = col * GRID_SIZE + (GRID_SIZE - 150) / 2
+          const posY = row * GRID_SIZE + (GRID_SIZE - 150) / 2
+
+          const newNote: Note = {
+            id: `user-${Date.now()}`,
+            content: "",
+            position: { x: posX, y: posY },
+            color: colorForColumn,
+            zIndex: highestZIndex + 1,
+            gridPosition: { row, col }
+          }
+
+          // グリッドの占有状態を更新
+          const newGridCells = [...gridCells]
+          newGridCells[row][col] = true
+          setGridCells(newGridCells)
+
+          // 選択色も更新
+          setSelectedColor(colorForColumn)
+          
+          setNotes([...notes, newNote])
+          setHighestZIndex(highestZIndex + 1)
         }
-        setNotes([...notes, newNote])
-        setHighestZIndex(highestZIndex + 1)
       }
     }
   }
 
   // 付箋を更新する関数
   const updateNote = (id: string, updates: Partial<Note>) => {
+    // 位置が更新される場合、グリッドの占有状態も更新
+    if (updates.gridPosition) {
+      const noteToUpdate = notes.find(note => note.id === id)
+      if (noteToUpdate && noteToUpdate.gridPosition) {
+        // 古い位置の占有状態をクリア
+        const newGridCells = [...gridCells]
+        newGridCells[noteToUpdate.gridPosition.row][noteToUpdate.gridPosition.col] = false
+        
+        // 新しい位置を占有中に設定
+        newGridCells[updates.gridPosition.row][updates.gridPosition.col] = true
+        setGridCells(newGridCells)
+      }
+    }
+    
+    // 編集終了フラグがある場合のみ、コンテンツをバックエンドに保存
+    if (updates.finishEditing && updates.content !== undefined) {
+      // ユーザーが作成した付箋のみを保存対象とする
+      if (id.startsWith('user-')) {
+        // 非同期で保存処理を行う
+        (async () => {
+          try {
+            // ここで明示的に型チェックを行う
+            const content = updates.content;
+            if (content !== undefined) {
+              await notesApi.saveNoteContent(id, content);
+              console.log(`付箋 ${id} の内容を保存しました`);
+            }
+          } catch (error) {
+            console.error('付箋内容保存エラー:', error);
+          }
+        })();
+      }
+    }
+
     setNotes(notes.map((note) => (note.id === id ? { ...note, ...updates, zIndex: highestZIndex + 1 } : note)))
     setHighestZIndex(highestZIndex + 1)
   }
 
   // 付箋を削除する関数
   const deleteNote = (id: string) => {
+    const noteToDelete = notes.find(note => note.id === id)
+    if (noteToDelete && noteToDelete.gridPosition) {
+      // グリッドの占有状態を更新
+      const newGridCells = [...gridCells]
+      newGridCells[noteToDelete.gridPosition.row][noteToDelete.gridPosition.col] = false
+      setGridCells(newGridCells)
+    }
+    
     setNotes(notes.filter((note) => note.id !== id))
   }
 
@@ -307,61 +566,102 @@ export default function CollaborativeCanvas() {
     setIsAILoading(true)
 
     try {
-      // バックエンドとの通信をシミュレート
-      await new Promise((resolve) => setTimeout(resolve, 1500))
+      // バックエンドAPIを呼び出す
+      const topic = currentTopic || "未来の働き方について";
+      const response = await notesApi.generateAINotes(topic, Math.floor(Math.random() * 2) + 1);
 
-      if (canvasRef.current) {
-        const rect = canvasRef.current.getBoundingClientRect()
-        const width = rect.width
-        const height = rect.height
+      if (response.success && canvasRef.current) {
+        const aiNotes = response.notes;
+        const newNotes: Note[] = [];
 
-        // 3〜5個のランダムな付箋を生成
-        const numNotes = Math.floor(Math.random() * 3) + 3
-        const newNotes: Note[] = []
+        // 生成された付箋をグリッドに配置
+        for (const aiNote of aiNotes) {
+          // 色に対応する列を見つける
+          const possibleCols = Object.entries(GRID_COLORS)
+            .filter(([_, colorName]) => colorName === aiNote.color)
+            .map(([colIndex]) => parseInt(colIndex));
+          
+          if (possibleCols.length === 0) continue;
+          
+          // 空いているセルを探す
+          let foundCell = false;
+          
+          // 左上から順に探索
+          for (let row = 0; row < GRID_ROWS && !foundCell; row++) {
+            for (const col of possibleCols) {
+              // セルが空いているかチェック
+              if (!gridCells[row][col]) {
+                foundCell = true;
+                
+                // 実際の座標を計算
+                const posX = col * GRID_SIZE + (GRID_SIZE - 150) / 2;
+                const posY = row * GRID_SIZE + (GRID_SIZE - 150) / 2;
 
-        for (let i = 0; i < numNotes; i++) {
-          // ランダムな位置を生成（既存の付箋と重ならないように）
-          const x = Math.random() * (width - 200) + 50
-          const y = Math.random() * (height - 200) + 50
+                newNotes.push({
+                  id: aiNote.id,
+                  content: aiNote.content,
+                  position: { x: posX, y: posY },
+                  color: aiNote.color,
+                  zIndex: highestZIndex + newNotes.length + 1,
+                  gridPosition: { row, col }
+                });
 
-          // ランダムなコンテンツを選択
-          let content = "AIのアイデア"
-          if (currentTopic && AI_GENERATED_CONTENTS[currentTopic as keyof typeof AI_GENERATED_CONTENTS]) {
-            const contentArray = AI_GENERATED_CONTENTS[currentTopic as keyof typeof AI_GENERATED_CONTENTS]
-            const contentIndex = Math.floor(Math.random() * contentArray.length)
-            content = contentArray[contentIndex]
-          } else {
-            const contentIndex = Math.floor(Math.random() * AI_GENERATED_CONTENTS["未来の働き方について"].length)
-            content = AI_GENERATED_CONTENTS["未来の働き方について"][contentIndex]
+                // グリッドの占有状態を更新
+                const newGridCells = [...gridCells];
+                newGridCells[row][col] = true;
+                setGridCells(newGridCells);
+                
+                break; // 空きセルが見つかったらこの列の探索を終了
+              }
+            }
+            if (foundCell) break; // 空きセルが見つかったら行の探索も終了
           }
+          
+          // 左上からの探索で見つからない場合のバックアップとして、ランダムに試す
+          if (!foundCell) {
+            // 残りのどこかに空きがあるか最大30回試行
+            for (let attempt = 0; attempt < 30 && !foundCell; attempt++) {
+              const row = Math.floor(Math.random() * GRID_ROWS);
+              const colIndex = Math.floor(Math.random() * possibleCols.length);
+              const col = possibleCols[colIndex];
+              
+              // セルが空いているかチェック
+              if (!gridCells[row][col]) {
+                foundCell = true;
+                
+                // 実際の座標を計算
+                const posX = col * GRID_SIZE + (GRID_SIZE - 150) / 2;
+                const posY = row * GRID_SIZE + (GRID_SIZE - 150) / 2;
 
-          // コンテンツに基づいて色を選択
-          let color = "yellow"
-          for (const [category, categoryColor] of Object.entries(AI_COLOR_GROUPS)) {
-            if (content.includes(category)) {
-              color = categoryColor
-              break
+                newNotes.push({
+                  id: aiNote.id,
+                  content: aiNote.content,
+                  position: { x: posX, y: posY },
+                  color: aiNote.color,
+                  zIndex: highestZIndex + newNotes.length + 1,
+                  gridPosition: { row, col }
+                });
+
+                // グリッドの占有状態を更新
+                const newGridCells = [...gridCells];
+                newGridCells[row][col] = true;
+                setGridCells(newGridCells);
+              }
             }
           }
-
-          newNotes.push({
-            id: `ai-${Date.now()}-${i}`,
-            content,
-            position: { x, y },
-            color,
-            zIndex: highestZIndex + i + 1,
-          })
         }
 
-        setNotes([...notes, ...newNotes])
-        setHighestZIndex(highestZIndex + numNotes)
+        if (newNotes.length > 0) {
+          setNotes([...notes, ...newNotes]);
+          setHighestZIndex(highestZIndex + newNotes.length);
+        }
       }
     } catch (error) {
-      console.error("AI付箋追加エラー:", error)
+      console.error("AI付箋追加エラー:", error);
     } finally {
-      setIsAILoading(false)
+      setIsAILoading(false);
     }
-  }
+  };
 
   // AIによる付箋整理のシミュレーション
   const handleAIOrganizeNotes = async () => {
@@ -435,6 +735,73 @@ export default function CollaborativeCanvas() {
     setIsTouchDevice("ontouchstart" in window || navigator.maxTouchPoints > 0)
   }, [])
 
+  // 付箋をレンダリングする前に、縦方向のコネクション（ヒモ）をレンダリングする関数を作成
+  const renderNoteConnections = () => {
+    const connections: React.ReactNode[] = [];
+    
+    // 列ごとに付箋を整理
+    const notesByColumn: Record<number, Note[]> = {};
+    
+    notes.forEach(note => {
+      if (note.gridPosition) {
+        const col = note.gridPosition.col;
+        if (!notesByColumn[col]) {
+          notesByColumn[col] = [];
+        }
+        notesByColumn[col].push(note);
+      }
+    });
+    
+    // 各列ごとに、行で並べ替えて縦方向のコネクションを作成
+    Object.entries(notesByColumn).forEach(([col, colNotes]) => {
+      // 行でソート
+      const sortedNotes = colNotes.sort((a, b) => {
+        if (a.gridPosition && b.gridPosition) {
+          return a.gridPosition.row - b.gridPosition.row;
+        }
+        return 0;
+      });
+      
+      // 並んだ付箋同士をつなぐ
+      for (let i = 0; i < sortedNotes.length - 1; i++) {
+        const currentNote = sortedNotes[i];
+        const nextNote = sortedNotes[i + 1];
+        
+        if (currentNote.gridPosition && nextNote.gridPosition) {
+          // 隣接しているかチェック（行が連続しているか）
+          if (nextNote.gridPosition.row - currentNote.gridPosition.row === 1) {
+            // 付箋の中心を計算
+            const startX = currentNote.position.x + 75; // 付箋幅の半分
+            const startY = currentNote.position.y + 150; // 付箋の下端
+            const endX = nextNote.position.x + 75; // 付箋幅の半分
+            const endY = nextNote.position.y; // 付箋の上端
+            
+            const connectionColor = 
+              COLORS[currentNote.color as keyof typeof COLORS].split(' ')[0].replace('bg-', 'border-');
+            
+            connections.push(
+              <div
+                key={`connection-${currentNote.id}-${nextNote.id}`}
+                className={`absolute pointer-events-none ${connectionColor}`}
+                style={{
+                  left: `${startX}px`,
+                  top: `${startY}px`,
+                  width: '2px',
+                  height: `${endY - startY}px`,
+                  borderLeft: '2px dashed',
+                  transform: 'translateX(-1px)',
+                  zIndex: Math.min(currentNote.zIndex, nextNote.zIndex) - 1
+                }}
+              />
+            );
+          }
+        }
+      }
+    });
+    
+    return connections;
+  };
+
   return (
     <div className="flex flex-col h-screen w-full">
       {/* ID入力ダイアログ */}
@@ -484,7 +851,58 @@ export default function CollaborativeCanvas() {
         <div className="flex items-center gap-2">
           {gameState === "idle" ? (
             <>
-              <ColorPalette colors={COLORS} selectedColor={selectedColor} onSelectColor={setSelectedColor} />
+              {/* 色ボタン - 付箋追加用 */}
+              <div className="flex items-center gap-1 mr-2">
+                {Object.entries(COLORS).map(([colorName, colorClass]) => {
+                  const baseColorClass = typeof colorClass === "string" ? colorClass.split(" ")[0] : ""
+                  return (
+                    <Button
+                      key={colorName}
+                      variant="ghost"
+                      size="icon"
+                      className={`w-6 h-6 rounded-full p-0 border-2 ${baseColorClass} ${
+                        selectedColor === colorName ? "border-white" : "border-transparent"
+                      }`}
+                      onClick={() => {
+                        setSelectedColor(colorName)
+                        // 最初の空きセルを探す
+                        const col = COLOR_COLUMNS[colorName as keyof typeof COLOR_COLUMNS]
+                        let row = -1
+                        for (let r = 0; r < GRID_ROWS; r++) {
+                          if (!gridCells[r][col]) {
+                            row = r
+                            break
+                          }
+                        }
+                        
+                        // 空きセルがあれば付箋を追加
+                        if (row !== -1 && canvasRef.current) {
+                          const posX = col * GRID_SIZE + (GRID_SIZE - 150) / 2
+                          const posY = row * GRID_SIZE + (GRID_SIZE - 150) / 2
+                          
+                          const newNote: Note = {
+                            id: `user-${Date.now()}`,
+                            content: "",
+                            position: { x: posX, y: posY },
+                            color: colorName,
+                            zIndex: highestZIndex + 1,
+                            gridPosition: { row, col }
+                          }
+                          
+                          // グリッドの占有状態を更新
+                          const newGridCells = [...gridCells]
+                          newGridCells[row][col] = true
+                          setGridCells(newGridCells)
+                          
+                          setNotes([...notes, newNote])
+                          setHighestZIndex(highestZIndex + 1)
+                        }
+                      }}
+                      title={`${colorName}の付箋を追加`}
+                    />
+                  )
+                })}
+              </div>
 
               <TooltipProvider>
                 <Tooltip>
@@ -539,7 +957,7 @@ export default function CollaborativeCanvas() {
                     <div>
                       <h3 className="font-medium">付箋の追加</h3>
                       <p className="text-sm text-muted-foreground">
-                        キャンバス上の空いている場所をクリック/タップすると新しい付箋が追加されます。
+                        上部の色ボタンをクリックすると、その色の付箋が追加されます。
                       </p>
                     </div>
                     <div>
@@ -549,15 +967,9 @@ export default function CollaborativeCanvas() {
                       </p>
                     </div>
                     <div>
-                      <h3 className="font-medium">付箋の移動</h3>
-                      <p className="text-sm text-muted-foreground">
-                        付箋のヘッダー部分や背景部分をドラッグすると付箋を移動できます。
-                      </p>
-                    </div>
-                    <div>
                       <h3 className="font-medium">付箋の色変更</h3>
                       <p className="text-sm text-muted-foreground">
-                        パレットアイコンをクリックすると付箋の色を変更できます。
+                        付箋内のパレットアイコンをクリックすると色を変更できます。
                       </p>
                     </div>
                     <div>
@@ -597,7 +1009,28 @@ export default function CollaborativeCanvas() {
             </>
           ) : (
             <>
-              <ColorPalette colors={COLORS} selectedColor={selectedColor} onSelectColor={setSelectedColor} />
+              {/* ゲームモード時の色ボタン */}
+              <div className="flex items-center gap-1 mr-2">
+                {Object.entries(COLORS).map(([colorName, colorClass]) => {
+                  const baseColorClass = typeof colorClass === "string" ? colorClass.split(" ")[0] : ""
+                  return (
+                    <Button
+                      key={colorName}
+                      variant="ghost"
+                      size="icon"
+                      className={`w-6 h-6 rounded-full p-0 border-2 ${baseColorClass} ${
+                        selectedColor === colorName ? "border-white" : "border-transparent"
+                      }`}
+                      onClick={() => {
+                        // ゲームモード時は色の選択のみ
+                        setSelectedColor(colorName)
+                      }}
+                      title={`${colorName}の付箋を選択`}
+                      disabled={gameState !== "user_turn"}
+                    />
+                  )
+                })}
+              </div>
 
               {gameState === "user_turn" && (
                 <Button variant="outline" onClick={endUserTurn} className="bg-green-500 hover:bg-green-600 text-white">
@@ -663,16 +1096,116 @@ export default function CollaborativeCanvas() {
       )}
 
       {/* キャンバス */}
-      <div
-        ref={canvasRef}
-        className="flex-1 relative bg-gray-100 overflow-auto"
-        onClick={addNote}
-        onTouchStart={isTouchDevice ? addNote : undefined}
+      <div 
+        ref={canvasWrapperRef}
+        className="flex-1 relative overflow-auto"
         style={{ touchAction: "auto" }}
       >
-        {notes.map((note) => (
-          <StickyNote key={note.id} note={note} updateNote={updateNote} deleteNote={deleteNote} colors={COLORS} />
-        ))}
+        <div
+          ref={canvasRef}
+          className="relative bg-gray-100"
+          onClick={addNote}
+          onTouchStart={isTouchDevice ? addNote : undefined}
+          style={{ 
+            width: `${GRID_COLS * GRID_SIZE}px`, 
+            height: `${GRID_ROWS * GRID_SIZE}px` 
+          }}
+        >
+          {/* グリッドの表示 */}
+          <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
+            {/* グリッドの線 */}
+            {Array(GRID_ROWS).fill(0).map((_, row) => (
+              <div key={`row-${row}`} className="flex">
+                {Array(GRID_COLS).fill(0).map((_, col) => {
+                  const cellColor = GRID_COLORS[col]
+                  const colorClass = COLORS[cellColor as keyof typeof COLORS].split(' ')[0]
+                  
+                  return (
+                    <div
+                      key={`cell-${row}-${col}`}
+                      className={`border border-gray-200 ${
+                        gridCells[row][col] ? 'opacity-20' : 'opacity-10'
+                      } ${colorClass}`}
+                      style={{
+                        width: `${GRID_SIZE}px`,
+                        height: `${GRID_SIZE}px`
+                      }}
+                    />
+                  )
+                })}
+              </div>
+            ))}
+          </div>
+          
+          {/* 付箋同士のコネクション（ヒモ）を表示 */}
+          {renderNoteConnections()}
+          
+          {notes.map((note) => (
+            <StickyNote key={note.id} note={note} updateNote={updateNote} deleteNote={deleteNote} colors={COLORS} />
+          ))}
+        </div>
+      </div>
+
+      {/* ミニマップ */}
+      <div className="absolute bottom-4 right-4 w-48 h-36 bg-white shadow-lg rounded-md p-1 border border-gray-300 z-50">
+        <div 
+          className="w-full h-full relative cursor-pointer" 
+          style={{ 
+            backgroundColor: '#f3f4f6',
+            border: '1px solid #e5e7eb'
+          }}
+          onClick={handleMinimapClick}
+        >
+          {/* ミニマップ上のノート表示 */}
+          {notes.map((note) => (
+            <div 
+              key={`minimap-${note.id}`}
+              className="absolute rounded-sm"
+              style={{
+                left: `${(note.position.x / viewportInfo.totalWidth) * 100}%`,
+                top: `${(note.position.y / viewportInfo.totalHeight) * 100}%`,
+                width: '4px',
+                height: '4px',
+                backgroundColor: Object.entries(COLORS).find(([color]) => color === note.color)?.[1].split(' ')[0].replace('bg-', '')
+              }}
+            />
+          ))}
+          
+          {/* 表示範囲を示す枠 - より詳細な表示 */}
+          <div 
+            className="absolute border-2 border-blue-500 bg-blue-100 bg-opacity-30 pointer-events-none"
+            style={{
+              left: `${(viewportInfo.x / viewportInfo.totalWidth) * 100}%`,
+              top: `${(viewportInfo.y / viewportInfo.totalHeight) * 100}%`,
+              width: `${Math.min((viewportInfo.width / viewportInfo.totalWidth) * 100, 100)}%`,
+              height: `${Math.min((viewportInfo.height / viewportInfo.totalHeight) * 100, 100)}%`,
+            }}
+          />
+          
+          {/* グリッド線の表示 */}
+          <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
+            {Array(GRID_ROWS).fill(0).map((_, row) => (
+              <div 
+                key={`minimap-row-${row}`}
+                className="absolute border-t border-gray-300 w-full"
+                style={{ top: `${(row * GRID_SIZE / viewportInfo.totalHeight) * 100}%` }}
+              />
+            ))}
+            {Array(GRID_COLS).fill(0).map((_, col) => (
+              <div 
+                key={`minimap-col-${col}`}
+                className="absolute border-l border-gray-300 h-full"
+                style={{ 
+                  left: `${(col * GRID_SIZE / viewportInfo.totalWidth) * 100}%`,
+                  backgroundColor: `rgba(${Object.entries(COLORS).find(([color]) => color === GRID_COLORS[col])?.[1].split(' ')[0].replace('bg-', '')}, 0.1)` 
+                }}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="absolute top-0 right-0 transform translate-x-1/2 -translate-y-1/2 bg-white text-xs p-1 rounded-full shadow border border-gray-200">
+          {Math.round((viewportInfo.width / viewportInfo.totalWidth) * 100)}%
+        </div>
       </div>
     </div>
   )
