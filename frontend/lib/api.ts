@@ -1,10 +1,6 @@
-// バックエンドAPIのベースURL
-// Docker内ではコンテナ名で参照、ブラウザからは直接localhostのポートで参照
-const BACKEND_URL = typeof window === 'undefined' 
-  ? process.env.NEXT_PUBLIC_API_URL 
-  : 'http://localhost:5001/api';
-
-const API_BASE_URL = BACKEND_URL || 'http://localhost:5001/api';
+// バックエンドAPIのベースURL - Docker環境対応版
+// Next.jsのrewrites()で設定したプロキシパスを使用
+const API_BASE_URL = '/api';
 
 // 付箋（ノート）API
 export const notesApi = {
@@ -70,13 +66,13 @@ export const notesApi = {
   },
 
   // AIによる付箋生成
-  generateAINotes: async (topic: string, count: number = 2) => {
+  generateAINotes: async (topic: string, count: number = 2, existingNotes: any[] = []) => {
     const response = await fetch(`${API_BASE_URL}/notes/ai/generate`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ topic, count }),
+      body: JSON.stringify({ topic, count, existingNotes }),
     });
     if (!response.ok) {
       throw new Error('Failed to generate AI notes');
@@ -85,13 +81,13 @@ export const notesApi = {
   },
 
   // ユーザーの付箋内容を保存
-  saveNoteContent: async (id: string, content: string) => {
+  saveNoteContent: async (id: string, content: string | undefined, gridPosition?: { row: number; col: number }, allNotes?: any[], creator?: 'ai' | 'user') => {
     const response = await fetch(`${API_BASE_URL}/notes/save`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ id, content }),
+      body: JSON.stringify({ id, content, gridPosition, allNotes, creator }),
     });
     if (!response.ok) {
       throw new Error('Failed to save note content');

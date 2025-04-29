@@ -7,7 +7,8 @@ import { X, Palette, User, Bot } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
-import type { Note, COLORS } from "@/components/collaborative-canvas"
+import type { Note } from "@/components/collaborative-canvas"
+import { COLORS, NOTE_SIZE } from "@/components/collaborative-canvas"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 
 interface StickyNoteProps {
@@ -15,9 +16,10 @@ interface StickyNoteProps {
   updateNote: (id: string, updates: Partial<Note>) => void
   deleteNote: (id: string) => void
   colors: typeof COLORS
+  canvasRef?: React.RefObject<HTMLDivElement>
 }
 
-export default function StickyNote({ note, updateNote, deleteNote, colors }: StickyNoteProps) {
+export default function StickyNote({ note, updateNote, deleteNote, colors, canvasRef }: StickyNoteProps) {
   const [isEditing, setIsEditing] = useState<boolean>(note.content === "")
   // グリッドベースのレイアウトを使用するため、ドラッグ機能は無効化
   const [isDragging, setIsDragging] = useState<boolean>(false)
@@ -26,6 +28,17 @@ export default function StickyNote({ note, updateNote, deleteNote, colors }: Sti
   const noteRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+
+  // デバッグ用：付箋とキャンバスの位置情報をログ出力
+  useEffect(() => {
+    if (noteRef.current && canvasRef?.current) {
+      const noteRect = noteRef.current.getBoundingClientRect();
+      const canvasRect = canvasRef.current.getBoundingClientRect();
+      console.log(`Rendered Note(${note.id}) rect:`, noteRect);
+      console.log('Canvas rect at render:', canvasRect);
+      console.log('DevicePixelRatio:', window.devicePixelRatio);
+    }
+  }, [noteRef.current]);
 
   // 編集モードになったらテキストエリアにフォーカス
   useEffect(() => {
@@ -151,7 +164,7 @@ export default function StickyNote({ note, updateNote, deleteNote, colors }: Sti
     <div
       ref={noteRef}
       className={cn(
-        "absolute shadow-md rounded p-3 w-[150px] h-[150px] flex flex-col",
+        "absolute shadow-md rounded p-3 flex flex-col",
         typeof colors[note.color as keyof typeof colors] === "string" ? colors[note.color as keyof typeof colors] : "",
         isEditing ? "ring-2 ring-blue-500" : "",
         isAIGenerated ? "animate-fadeIn" : "", // AIが生成した付箋にアニメーション効果
@@ -159,9 +172,11 @@ export default function StickyNote({ note, updateNote, deleteNote, colors }: Sti
       style={{
         left: `${note.position.x}px`,
         top: `${note.position.y}px`,
+        width: `${NOTE_SIZE}px`,
+        height: `${NOTE_SIZE}px`,
         zIndex: note.zIndex,
         cursor: "default",
-        fontSize: "0.9rem", // フォントサイズを大きくしてさらに読みやすく
+        fontSize: "0.8rem", // フォントサイズを少し小さくして調整
       }}
       onMouseDown={handleMouseDown}
       onTouchStart={handleTouchStart}

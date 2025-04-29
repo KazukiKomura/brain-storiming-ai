@@ -32,6 +32,7 @@ export type Note = {
   zIndex: number
   gridPosition?: { row: number; col: number } // グリッドでの位置を追加
   finishEditing?: boolean // 編集終了フラグを追加
+  creator?: 'ai' | 'user' // 作成者情報を追加
 }
 
 // 利用可能な付箋の色
@@ -63,9 +64,10 @@ export const COLOR_COLUMNS = {
 }
 
 // グリッドのサイズ
-const GRID_SIZE = 180; // より大きいセルサイズ（ピクセル）
+const GRID_SIZE = 180; // グリッドサイズを1.5倍に（120px→180px）
 const GRID_COLS = 15; // 列数
-const GRID_ROWS = 15; // 行数
+const GRID_ROWS = 20; // 行数を15から20に増やす
+export const NOTE_SIZE = 150; // 付箋のサイズを1.5倍に（100px→150px）
 
 // 色とグリッド列の関係を再定義（各列に色を割り当て）
 export const GRID_COLORS: Record<number, string> = {
@@ -156,7 +158,13 @@ const AI_COLOR_GROUPS = {
 // ゲームの状態を表す型
 type GameState = "idle" | "waiting_for_id" | "topic_selection" | "user_turn" | "ai_turn"
 
-export default function CollaborativeCanvas() {
+// プロパティタイプの定義を更新
+interface CollaborativeCanvasProps {
+  isTestMode?: boolean;
+  onSaveNotes?: (notes: Note[]) => void;
+}
+
+export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }: CollaborativeCanvasProps) {
   const [notes, setNotes] = useState<Note[]>([])
   const [selectedColor, setSelectedColor] = useState<string>("yellow")
   const [canvasTitle, setCanvasTitle] = useState<string>("コラボレーティブキャンバス")
@@ -183,6 +191,27 @@ export default function CollaborativeCanvas() {
   const canvasRef = useRef<HTMLDivElement>(null)
   const canvasWrapperRef = useRef<HTMLDivElement>(null)
   const userIdInputRef = useRef<HTMLInputElement>(null)
+
+  // セッションタイプに応じたデフォルトのタイトル設定
+  useEffect(() => {
+    if (isTestMode) {
+      setCanvasTitle("テストセッション");
+    } else {
+      setCanvasTitle("ブレインストーミングセッション");
+    }
+  }, [isTestMode]);
+
+  // ノートが変更されたときの処理
+  useEffect(() => {
+    if (notes.length > 0 && onSaveNotes) {
+      // 変更の度に保存するのではなく、デバウンスするか定期的に保存
+      const saveTimeout = setTimeout(() => {
+        onSaveNotes(notes);
+      }, 3000); // 3秒後に保存
+      
+      return () => clearTimeout(saveTimeout);
+    }
+  }, [notes, onSaveNotes]);
 
   // ビューポート情報の更新
   const updateViewportInfo = () => {
@@ -231,18 +260,40 @@ export default function CollaborativeCanvas() {
 
   // ミニマップでのクリック処理
   const handleMinimapClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
+    // ミニマップの矩形情報を取得
+    const minimap = e.currentTarget.getBoundingClientRect();
     
-    // ミニマップの位置をキャンバス座標に変換
-    const ratioX = viewportInfo.totalWidth / rect.width
-    const ratioY = viewportInfo.totalHeight / rect.height
+    // ミニマップ内でのクリック位置（相対位置、0-1の割合）
+    const relativeX = (e.clientX - minimap.left) / minimap.width;
+    const relativeY = (e.clientY - minimap.top) / minimap.height;
     
-    const targetX = x * ratioX - (viewportInfo.width / 2)
-    const targetY = y * ratioY - (viewportInfo.height / 2)
+    // デバッグ情報
+    console.log(`Minimap: click at client (${e.clientX}, ${e.clientY}), minimap rect (${minimap.left}, ${minimap.top}, ${minimap.width}, ${minimap.height})`);
+    console.log(`Minimap: relative position (${relativeX.toFixed(4)}, ${relativeY.toFixed(4)})`);
     
-    scrollToPosition(targetX, targetY)
+    // グリッド座標を直接計算 - ミニマップの相対位置からグリッド位置を計算
+    const gridCol = Math.min(Math.floor(relativeX * GRID_COLS), GRID_COLS - 1);
+    const gridRow = Math.min(Math.floor(relativeY * GRID_ROWS), GRID_ROWS - 1);
+    
+    console.log(`Minimap: target grid cell (${gridRow}, ${gridCol})`);
+    
+    // グリッド座標からキャンバス上の絶対座標を計算（スクロール用）
+    const canvasX = gridCol * GRID_SIZE;
+    const canvasY = gridRow * GRID_SIZE;
+    
+    console.log(`Minimap: target canvas position (${canvasX}, ${canvasY})`);
+    
+    // ビューポートの中央にグリッドセルが表示されるようにスクロール
+    const targetX = Math.max(0, canvasX - (viewportInfo.width / 2) + (GRID_SIZE / 2));
+    const targetY = Math.max(0, canvasY - (viewportInfo.height / 2) + (GRID_SIZE / 2));
+    
+    console.log(`Minimap: scrolling to (${targetX}, ${targetY})`);
+    
+    // スクロール位置を設定
+    scrollToPosition(targetX, targetY);
+    
+    // ミニマップクリックではノートを生成せず、ここで終了する
+    return;
   }
 
   // ゲームを開始する
@@ -343,8 +394,8 @@ export default function CollaborativeCanvas() {
                 foundCell = true;
                 
                 // 実際の座標を計算（グリッドのセルの中央に配置）
-                const posX = col * GRID_SIZE + (GRID_SIZE - 150) / 2
-                const posY = row * GRID_SIZE + (GRID_SIZE - 150) / 2
+                const posX = col * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2
+                const posY = row * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2
 
                 newNotes.push({
                   id: `ai-${Date.now()}-${i}`,
@@ -352,7 +403,8 @@ export default function CollaborativeCanvas() {
                   position: { x: posX, y: posY },
                   color,
                   zIndex: highestZIndex + i + 1,
-                  gridPosition: { row, col }
+                  gridPosition: { row, col },
+                  creator: 'ai'
                 })
 
                 // グリッドの占有状態を更新
@@ -379,8 +431,8 @@ export default function CollaborativeCanvas() {
                   foundCell = true;
                   
                   // 実際の座標を計算
-                  const posX = col * GRID_SIZE + (GRID_SIZE - 150) / 2
-                  const posY = row * GRID_SIZE + (GRID_SIZE - 150) / 2
+                  const posX = col * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2
+                  const posY = row * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2
 
                   newNotes.push({
                     id: `ai-${Date.now()}-${i}`,
@@ -388,7 +440,8 @@ export default function CollaborativeCanvas() {
                     position: { x: posX, y: posY },
                     color,
                     zIndex: highestZIndex + i + 1,
-                    gridPosition: { row, col }
+                    gridPosition: { row, col },
+                    creator: 'ai'
                   })
 
                   // グリッドの占有状態を更新
@@ -422,68 +475,70 @@ export default function CollaborativeCanvas() {
 
   // キャンバス上のクリックイベント処理
   const addNote = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
-    // ユーザーのターン以外は付箋を追加できない
-    if (gameState !== "user_turn" && gameState !== "idle") {
-      return
+    // イベントがキャンバスから直接発生したことを確認
+    if (e.currentTarget !== canvasRef.current) return;
+
+    const canvas = e.currentTarget;
+    const rect = canvas.getBoundingClientRect();
+    const wrapper = canvasWrapperRef.current;
+    if (!wrapper) return;
+
+    let clientX: number;
+    let clientY: number;
+
+    if ('touches' in e) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
     }
 
-    // キャンバス上の位置を取得
-    if (canvasRef.current) {
-      let clientX, clientY
+    // キャンバス要素の左上からの相対座標を計算 (scroll は getBoundingClientRect に含まれるため不要)
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
 
-      if ("touches" in e) {
-        // タッチイベントの場合
-        const touch = e.touches[0]
-        clientX = touch.clientX
-        clientY = touch.clientY
+    // デバッグ情報
+    console.log('--- addNote start ---');
+    console.log('raw click', { clientX, clientY });
+    console.log('canvas rect', rect);
+    console.log('calc relative inside canvas', { x, y });
+
+    const gridRow = Math.floor(y / GRID_SIZE);
+    const gridCol = Math.floor(x / GRID_SIZE);
+
+    console.log('grid cell', { row: gridRow, col: gridCol });
+
+    // グリッド範囲チェックとノート追加ロジック (変更なし)
+    if (gridRow >= 0 && gridRow < GRID_ROWS && gridCol >= 0 && gridCol < GRID_COLS) {
+      if (!gridCells[gridRow][gridCol]) {
+        const colorForColumn = GRID_COLORS[gridCol];
+        const posX = gridCol * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2;
+        const posY = gridRow * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2;
+
+        const newNote: Note = {
+          id: `user-${Date.now()}`,
+          content: "",
+          position: { x: posX, y: posY },
+          color: colorForColumn,
+          zIndex: highestZIndex + 1,
+          gridPosition: { row: gridRow, col: gridCol },
+          creator: 'user'
+        };
+
+        const newGridCells = [...gridCells];
+        newGridCells[gridRow][gridCol] = true;
+        setGridCells(newGridCells);
+        setSelectedColor(colorForColumn);
+        setNotes([...notes, newNote]);
+        setHighestZIndex(highestZIndex + 1);
       } else {
-        // マウスイベントの場合
-        clientX = e.clientX
-        clientY = e.clientY
+        console.log(`Grid cell (${gridRow}, ${gridCol}) is already occupied.`);
       }
-
-      const rect = canvasRef.current.getBoundingClientRect()
-      const x = clientX - rect.left + canvasWrapperRef.current!.scrollLeft
-      const y = clientY - rect.top + canvasWrapperRef.current!.scrollTop
-
-      // クリックしたグリッドのセルを計算
-      const col = Math.floor(x / GRID_SIZE)
-      const row = Math.floor(y / GRID_SIZE)
-
-      // グリッドの範囲内であることを確認
-      if (row >= 0 && row < GRID_ROWS && col >= 0 && col < GRID_COLS) {
-        // クリックしたグリッドが空いているかを確認
-        if (!gridCells[row][col]) {
-          // グリッドの列に対応する色を取得
-          const colorForColumn = GRID_COLORS[col]
-          
-          // 実際の座標を計算（グリッドのセルの中央に配置）
-          const posX = col * GRID_SIZE + (GRID_SIZE - 150) / 2
-          const posY = row * GRID_SIZE + (GRID_SIZE - 150) / 2
-
-          const newNote: Note = {
-            id: `user-${Date.now()}`,
-            content: "",
-            position: { x: posX, y: posY },
-            color: colorForColumn,
-            zIndex: highestZIndex + 1,
-            gridPosition: { row, col }
-          }
-
-          // グリッドの占有状態を更新
-          const newGridCells = [...gridCells]
-          newGridCells[row][col] = true
-          setGridCells(newGridCells)
-
-          // 選択色も更新
-          setSelectedColor(colorForColumn)
-          
-          setNotes([...notes, newNote])
-          setHighestZIndex(highestZIndex + 1)
-        }
-      }
+    } else {
+      console.log(`Click (${gridRow}, ${gridCol}) is outside the grid boundaries.`);
     }
-  }
+  };
 
   // 付箋を更新する関数
   const updateNote = (id: string, updates: Partial<Note>) => {
@@ -508,12 +563,41 @@ export default function CollaborativeCanvas() {
         // 非同期で保存処理を行う
         (async () => {
           try {
-            // ここで明示的に型チェックを行う
-            const content = updates.content;
-            if (content !== undefined) {
-              await notesApi.saveNoteContent(id, content);
-              console.log(`付箋 ${id} の内容を保存しました`);
-            }
+            // 付箋の現在の情報を取得
+            const noteToUpdate = notes.find(note => note.id === id);
+            // グリッド位置情報があれば一緒に保存
+            const gridPosition = noteToUpdate?.gridPosition;
+            
+            // 全ての付箋情報（編集されたものを含む）を準備
+            const updatedNotes = notes.map(note => 
+              note.id === id 
+                ? { 
+                    ...note, 
+                    content: updates.content, 
+                    ...(updates.gridPosition && { gridPosition: updates.gridPosition }) 
+                  }
+                : note
+            );
+            
+            // 必要な情報だけを含む配列を作成
+            const allNotesData = updatedNotes.map(note => ({
+              id: note.id,
+              content: note.content,
+              gridPosition: note.gridPosition,
+              creator: note.creator || (note.id.startsWith('ai-') ? 'ai' : 'user')
+            }));
+            
+            // デバッグログを追加
+            console.log('保存する付箋データ:', {
+              id,
+              content: updates.content,
+              gridPosition,
+              allNotesDataLength: allNotesData.length
+            });
+            
+            // 単一の付箋の更新と全ての付箋情報を一緒に送信
+            await notesApi.saveNoteContent(id, updates.content, gridPosition, allNotesData, 'user');
+            console.log(`付箋 ${id} の内容と全ての付箋情報を保存しました`);
           } catch (error) {
             console.error('付箋内容保存エラー:', error);
           }
@@ -542,7 +626,16 @@ export default function CollaborativeCanvas() {
   const clearCanvas = () => {
     if (confirm("すべての付箋を削除してもよろしいですか？")) {
       setNotes([])
+      // グリッドセルの占有状態をリセット
+      setGridCells(Array(GRID_ROWS).fill(0).map(() => Array(GRID_COLS).fill(false)))
     }
+  }
+  
+  // 確認なしでキャンバスをクリアする関数
+  const clearCanvasWithoutConfirm = () => {
+    setNotes([])
+    // グリッドセルの占有状態をリセット
+    setGridCells(Array(GRID_ROWS).fill(0).map(() => Array(GRID_COLS).fill(false)))
   }
 
   // キャンバスを画像として保存する関数
@@ -561,107 +654,103 @@ export default function CollaborativeCanvas() {
     }
   }
 
-  // AIによる付箋追加のシミュレーション
+  // AIによる付箋生成
   const handleAIAddNotes = async () => {
-    setIsAILoading(true)
-
+    if (isAILoading) return
+    
     try {
-      // バックエンドAPIを呼び出す
-      const topic = currentTopic || "未来の働き方について";
-      const response = await notesApi.generateAINotes(topic, Math.floor(Math.random() * 2) + 1);
-
-      if (response.success && canvasRef.current) {
-        const aiNotes = response.notes;
-        const newNotes: Note[] = [];
-
-        // 生成された付箋をグリッドに配置
-        for (const aiNote of aiNotes) {
-          // 色に対応する列を見つける
-          const possibleCols = Object.entries(GRID_COLORS)
-            .filter(([_, colorName]) => colorName === aiNote.color)
-            .map(([colIndex]) => parseInt(colIndex));
-          
-          if (possibleCols.length === 0) continue;
-          
-          // 空いているセルを探す
-          let foundCell = false;
-          
-          // 左上から順に探索
-          for (let row = 0; row < GRID_ROWS && !foundCell; row++) {
-            for (const col of possibleCols) {
-              // セルが空いているかチェック
-              if (!gridCells[row][col]) {
-                foundCell = true;
-                
-                // 実際の座標を計算
-                const posX = col * GRID_SIZE + (GRID_SIZE - 150) / 2;
-                const posY = row * GRID_SIZE + (GRID_SIZE - 150) / 2;
-
-                newNotes.push({
-                  id: aiNote.id,
-                  content: aiNote.content,
-                  position: { x: posX, y: posY },
-                  color: aiNote.color,
-                  zIndex: highestZIndex + newNotes.length + 1,
-                  gridPosition: { row, col }
-                });
-
-                // グリッドの占有状態を更新
-                const newGridCells = [...gridCells];
-                newGridCells[row][col] = true;
-                setGridCells(newGridCells);
-                
-                break; // 空きセルが見つかったらこの列の探索を終了
-              }
-            }
-            if (foundCell) break; // 空きセルが見つかったら行の探索も終了
-          }
-          
-          // 左上からの探索で見つからない場合のバックアップとして、ランダムに試す
-          if (!foundCell) {
-            // 残りのどこかに空きがあるか最大30回試行
-            for (let attempt = 0; attempt < 30 && !foundCell; attempt++) {
-              const row = Math.floor(Math.random() * GRID_ROWS);
-              const colIndex = Math.floor(Math.random() * possibleCols.length);
-              const col = possibleCols[colIndex];
+      setIsAILoading(true)
+      
+      // AIに付箋を生成させる
+      const result = await notesApi.generateAINotes(canvasTitle, 3, notes)
+      
+      if (!result.success) {
+        console.error('AI付箋生成エラー')
+        return
+      }
+      
+      const aiNotes = result.notes
+      const newNotes: Note[] = []
+      
+      // 生成された付箋を画面に追加
+      for (const aiNote of aiNotes) {
+        let foundCell = false
+        
+        // 該当する色のグリッド列を探す
+        const colorIndex = Object.keys(COLORS).indexOf(aiNote.color)
+        const possibleCols = colorIndex >= 0 ? [colorIndex] : Object.keys(GRID_COLORS).map(Number)
+        
+        // 左上から順に探索
+        for (let row = 0; row < GRID_ROWS && !foundCell; row++) {
+          for (const col of possibleCols) {
+            // セルが空いているかチェック
+            if (!gridCells[row][col]) {
+              foundCell = true;
               
-              // セルが空いているかチェック
-              if (!gridCells[row][col]) {
-                foundCell = true;
-                
-                // 実際の座標を計算
-                const posX = col * GRID_SIZE + (GRID_SIZE - 150) / 2;
-                const posY = row * GRID_SIZE + (GRID_SIZE - 150) / 2;
+              // 実際の座標を計算
+              const posX = col * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2;
+              const posY = row * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2;
 
-                newNotes.push({
-                  id: aiNote.id,
-                  content: aiNote.content,
-                  position: { x: posX, y: posY },
-                  color: aiNote.color,
-                  zIndex: highestZIndex + newNotes.length + 1,
-                  gridPosition: { row, col }
-                });
+              newNotes.push({
+                id: aiNote.id,
+                content: aiNote.content,
+                position: { x: posX, y: posY },
+                color: aiNote.color,
+                zIndex: highestZIndex + newNotes.length + 1,
+                gridPosition: { row, col },
+                creator: 'ai' // AI生成であることを明示
+              });
 
-                // グリッドの占有状態を更新
-                const newGridCells = [...gridCells];
-                newGridCells[row][col] = true;
-                setGridCells(newGridCells);
-              }
+              // グリッドの占有状態を更新
+              const newGridCells = [...gridCells];
+              newGridCells[row][col] = true;
+              setGridCells(newGridCells);
+              
+              break; // 空きセルが見つかったらこの列の探索を終了
             }
           }
-        }
-
-        if (newNotes.length > 0) {
-          setNotes([...notes, ...newNotes]);
-          setHighestZIndex(highestZIndex + newNotes.length);
+          if (foundCell) break; // 空きセルが見つかったら行の探索も終了
         }
       }
+      
+      // 新しい付箋を既存の付箋に追加
+      if (newNotes.length > 0) {
+        const combinedNotes = [...notes, ...newNotes];
+        setNotes(combinedNotes);
+        setHighestZIndex(highestZIndex + newNotes.length);
+        
+        // AI生成後に全ての付箋情報をバックエンドに保存
+        try {
+          // 保存用のデータを作成
+          const allNotesData = combinedNotes.map(note => ({
+            id: note.id,
+            content: note.content,
+            gridPosition: note.gridPosition,
+            creator: note.creator || (note.id.startsWith('ai-') ? 'ai' : 'user')
+          }));
+          
+          // 最初のAI生成付箋のIDを使用して保存
+          const firstAINote = newNotes[0];
+          await notesApi.saveNoteContent(
+            firstAINote.id, 
+            firstAINote.content, 
+            firstAINote.gridPosition, 
+            allNotesData,
+            'ai'
+          );
+          
+          console.log(`AI生成付箋と全ての付箋情報を保存しました（${allNotesData.length}個）`);
+        } catch (error) {
+          console.error('AI生成付箋の保存エラー:', error);
+        }
+      }
+      
     } catch (error) {
-      console.error("AI付箋追加エラー:", error);
+      console.error('AI付箋生成エラー:', error)
     } finally {
-      setIsAILoading(false);
+      setIsAILoading(false)
     }
-  };
+  }
 
   // AIによる付箋整理のシミュレーション
   const handleAIOrganizeNotes = async () => {
@@ -762,18 +851,34 @@ export default function CollaborativeCanvas() {
         return 0;
       });
       
-      // 並んだ付箋同士をつなぐ
-      for (let i = 0; i < sortedNotes.length - 1; i++) {
-        const currentNote = sortedNotes[i];
-        const nextNote = sortedNotes[i + 1];
+      // 色ごとにグループ化
+      const notesByColor: Record<string, Note[]> = {};
+      sortedNotes.forEach(note => {
+        if (!notesByColor[note.color]) {
+          notesByColor[note.color] = [];
+        }
+        notesByColor[note.color].push(note);
+      });
+      
+      // 同じ色の付箋同士をつなぐ
+      Object.entries(notesByColor).forEach(([color, colorNotes]) => {
+        // 色ごとに行でソート
+        const sortedColorNotes = colorNotes.sort((a, b) => {
+          if (a.gridPosition && b.gridPosition) {
+            return a.gridPosition.row - b.gridPosition.row;
+          }
+          return 0;
+        });
         
-        if (currentNote.gridPosition && nextNote.gridPosition) {
-          // 隣接しているかチェック（行が連続しているか）
-          if (nextNote.gridPosition.row - currentNote.gridPosition.row === 1) {
+        // 同じ色の隣接する付箋をつなぐ
+        for (let i = 0; i < sortedColorNotes.length - 1; i++) {
+          const currentNote = sortedColorNotes[i];
+          const nextNote = sortedColorNotes[i + 1];
+          
+          if (currentNote.gridPosition && nextNote.gridPosition) {
             // 付箋の中心を計算
-            const startX = currentNote.position.x + 75; // 付箋幅の半分
-            const startY = currentNote.position.y + 150; // 付箋の下端
-            const endX = nextNote.position.x + 75; // 付箋幅の半分
+            const startX = currentNote.position.x + NOTE_SIZE / 2; // 付箋幅の半分
+            const startY = currentNote.position.y + NOTE_SIZE; // 付箋の下端
             const endY = nextNote.position.y; // 付箋の上端
             
             const connectionColor = 
@@ -796,11 +901,62 @@ export default function CollaborativeCanvas() {
             );
           }
         }
-      }
+      });
     });
     
     return connections;
   };
+
+  // 色ボタンでの付箋追加処理
+  const handleColorButtonClick = (colorName: string) => {
+    setSelectedColor(colorName);
+    // 最初の空きセルを探す
+    const col = COLOR_COLUMNS[colorName as keyof typeof COLOR_COLUMNS];
+    let row = -1;
+    for (let r = 0; r < GRID_ROWS; r++) {
+      if (!gridCells[r][col]) {
+        row = r;
+        break;
+      }
+    }
+    
+    // 空きセルがあれば付箋を追加
+    if (row !== -1 && canvasRef.current) {
+      const posX = col * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2;
+      const posY = row * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2;
+      
+      const newNote: Note = {
+        id: `user-${Date.now()}`,
+        content: "",
+        position: { x: posX, y: posY },
+        color: colorName,
+        zIndex: highestZIndex + 1,
+        gridPosition: { row, col },
+        creator: 'user'
+      };
+      
+      // グリッドの占有状態を更新
+      const newGridCells = [...gridCells];
+      newGridCells[row][col] = true;
+      setGridCells(newGridCells);
+      
+      setNotes([...notes, newNote]);
+      setHighestZIndex(highestZIndex + 1);
+    }
+  };
+
+  // キャンバスをクリアするイベントリスナー
+  useEffect(() => {
+    const handleClearCanvasEvent = () => {
+      clearCanvasWithoutConfirm();
+    };
+    
+    document.addEventListener('clearCanvas', handleClearCanvasEvent);
+    
+    return () => {
+      document.removeEventListener('clearCanvas', handleClearCanvasEvent);
+    };
+  }, []);
 
   return (
     <div className="flex flex-col h-screen w-full">
@@ -828,238 +984,207 @@ export default function CollaborativeCanvas() {
       </Dialog>
 
       {/* ヘッダー */}
-      <header className="flex justify-between items-center p-3 bg-gray-900 text-white">
-        <div className="flex items-center">
-          {isEditingTitle && gameState === "idle" ? (
-            <Input
-              value={canvasTitle}
-              onChange={(e) => setCanvasTitle(e.target.value)}
-              onBlur={() => setIsEditingTitle(false)}
-              onKeyDown={(e) => e.key === "Enter" && setIsEditingTitle(false)}
-              className="max-w-xs text-black"
-              autoFocus
-            />
-          ) : (
-            <h1
-              className={`text-xl font-bold ${gameState === "idle" ? "cursor-pointer" : ""}`}
-              onClick={() => gameState === "idle" && setIsEditingTitle(true)}
-            >
-              {canvasTitle}
-            </h1>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          {gameState === "idle" ? (
-            <>
-              {/* 色ボタン - 付箋追加用 */}
-              <div className="flex items-center gap-1 mr-2">
-                {Object.entries(COLORS).map(([colorName, colorClass]) => {
-                  const baseColorClass = typeof colorClass === "string" ? colorClass.split(" ")[0] : ""
-                  return (
-                    <Button
-                      key={colorName}
-                      variant="ghost"
-                      size="icon"
-                      className={`w-6 h-6 rounded-full p-0 border-2 ${baseColorClass} ${
-                        selectedColor === colorName ? "border-white" : "border-transparent"
-                      }`}
-                      onClick={() => {
-                        setSelectedColor(colorName)
-                        // 最初の空きセルを探す
-                        const col = COLOR_COLUMNS[colorName as keyof typeof COLOR_COLUMNS]
-                        let row = -1
-                        for (let r = 0; r < GRID_ROWS; r++) {
-                          if (!gridCells[r][col]) {
-                            row = r
-                            break
-                          }
-                        }
-                        
-                        // 空きセルがあれば付箋を追加
-                        if (row !== -1 && canvasRef.current) {
-                          const posX = col * GRID_SIZE + (GRID_SIZE - 150) / 2
-                          const posY = row * GRID_SIZE + (GRID_SIZE - 150) / 2
-                          
-                          const newNote: Note = {
-                            id: `user-${Date.now()}`,
-                            content: "",
-                            position: { x: posX, y: posY },
-                            color: colorName,
-                            zIndex: highestZIndex + 1,
-                            gridPosition: { row, col }
-                          }
-                          
-                          // グリッドの占有状態を更新
-                          const newGridCells = [...gridCells]
-                          newGridCells[row][col] = true
-                          setGridCells(newGridCells)
-                          
-                          setNotes([...notes, newNote])
-                          setHighestZIndex(highestZIndex + 1)
-                        }
-                      }}
-                      title={`${colorName}の付箋を追加`}
-                    />
-                  )
-                })}
-              </div>
+      {!isTestMode && (
+        <header className="flex justify-between items-center p-3 bg-gray-900 text-white">
+          <div className="flex items-center">
+            {isEditingTitle && gameState === "idle" ? (
+              <Input
+                value={canvasTitle}
+                onChange={(e) => setCanvasTitle(e.target.value)}
+                onBlur={() => setIsEditingTitle(false)}
+                onKeyDown={(e) => e.key === "Enter" && setIsEditingTitle(false)}
+                className="max-w-xs text-black"
+                autoFocus
+              />
+            ) : (
+              <h1
+                className={`text-xl font-bold ${gameState === "idle" ? "cursor-pointer" : ""}`}
+                onClick={() => gameState === "idle" && setIsEditingTitle(true)}
+              >
+                {canvasTitle}
+              </h1>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {gameState === "idle" ? (
+              <>
+                {/* 色ボタン - 付箋追加用 */}
+                <div className="flex items-center gap-1 mr-2">
+                  {Object.entries(COLORS).map(([colorName, colorClass]) => {
+                    const baseColorClass = typeof colorClass === "string" ? colorClass.split(" ")[0] : ""
+                    return (
+                      <Button
+                        key={colorName}
+                        variant="ghost"
+                        size="icon"
+                        className={`w-6 h-6 rounded-full p-0 border-2 ${baseColorClass} ${
+                          selectedColor === colorName ? "border-white" : "border-transparent"
+                        }`}
+                        onClick={() => {
+                          handleColorButtonClick(colorName)
+                        }}
+                        title={`${colorName}の付箋を追加`}
+                      />
+                    )
+                  })}
+                </div>
 
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={handleAIAddNotes}
-                      disabled={isAILoading}
-                      className="bg-purple-500 hover:bg-purple-600 text-white"
-                    >
-                      {isAILoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={handleAIAddNotes}
+                        disabled={isAILoading}
+                        className="bg-purple-500 hover:bg-purple-600 text-white"
+                      >
+                        {isAILoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>AIによる付箋追加</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={handleAIOrganizeNotes}
+                        disabled={isAILoading}
+                        className="bg-blue-500 hover:bg-blue-600 text-white"
+                      >
+                        {isAILoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <LayoutGrid className="h-4 w-4" />}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>AIによる付箋整理</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <Button variant="outline" size="icon" title="ヘルプ">
+                      <HelpCircle className="h-4 w-4" />
                     </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>AIによる付箋追加</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={handleAIOrganizeNotes}
-                      disabled={isAILoading}
-                      className="bg-blue-500 hover:bg-blue-600 text-white"
-                    >
-                      {isAILoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <LayoutGrid className="h-4 w-4" />}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>AIによる付箋整理</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-
-              <Dialog>
-                <DialogTrigger asChild>
-                  <Button variant="outline" size="icon" title="ヘルプ">
-                    <HelpCircle className="h-4 w-4" />
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>使い方</DialogTitle>
-                    <DialogDescription>このアプリケーションの基本的な操作方法です</DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4 mt-4">
-                    <div>
-                      <h3 className="font-medium">付箋の追加</h3>
-                      <p className="text-sm text-muted-foreground">
-                        上部の色ボタンをクリックすると、その色の付箋が追加されます。
-                      </p>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>使い方</DialogTitle>
+                      <DialogDescription>このアプリケーションの基本的な操作方法です</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4 mt-4">
+                      <div>
+                        <h3 className="font-medium">付箋の追加</h3>
+                        <p className="text-sm text-muted-foreground">
+                          上部の色ボタンをクリックすると、その色の付箋が追加されます。
+                        </p>
+                      </div>
+                      <div>
+                        <h3 className="font-medium">付箋の編集</h3>
+                        <p className="text-sm text-muted-foreground">
+                          付箋のテキスト部分をクリック/タップすると編集モードになります。編集が終わったら「完了」ボタンをクリックしてください。
+                        </p>
+                      </div>
+                      <div>
+                        <h3 className="font-medium">付箋の色変更</h3>
+                        <p className="text-sm text-muted-foreground">
+                          付箋内のパレットアイコンをクリックすると色を変更できます。
+                        </p>
+                      </div>
+                      <div>
+                        <h3 className="font-medium">AI機能</h3>
+                        <p className="text-sm text-muted-foreground">
+                          <span className="inline-flex items-center mr-1">
+                            <Sparkles className="h-3 w-3 mr-1" /> ボタン
+                          </span>
+                          : AIがアイデアを生成し、自動的に付箋を追加します。
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          <span className="inline-flex items-center mr-1">
+                            <LayoutGrid className="h-3 w-3 mr-1" /> ボタン
+                          </span>
+                          : AIが既存の付箋を意味的に整理し、グループ化します。
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-medium">付箋の編集</h3>
-                      <p className="text-sm text-muted-foreground">
-                        付箋のテキスト部分をクリック/タップすると編集モードになります。編集が終わったら「完了」ボタンをクリックしてください。
-                      </p>
-                    </div>
-                    <div>
-                      <h3 className="font-medium">付箋の色変更</h3>
-                      <p className="text-sm text-muted-foreground">
-                        付箋内のパレットアイコンをクリックすると色を変更できます。
-                      </p>
-                    </div>
-                    <div>
-                      <h3 className="font-medium">AI機能</h3>
-                      <p className="text-sm text-muted-foreground">
-                        <span className="inline-flex items-center mr-1">
-                          <Sparkles className="h-3 w-3 mr-1" /> ボタン
-                        </span>
-                        : AIがアイデアを生成し、自動的に付箋を追加します。
-                      </p>
-                      <p className="text-sm text-muted-foreground">
-                        <span className="inline-flex items-center mr-1">
-                          <LayoutGrid className="h-3 w-3 mr-1" /> ボタン
-                        </span>
-                        : AIが既存の付箋を意味的に整理し、グループ化します。
-                      </p>
-                    </div>
-                  </div>
-                </DialogContent>
-              </Dialog>
+                  </DialogContent>
+                </Dialog>
 
-              <Button variant="outline" size="icon" onClick={saveAsImage} title="画像として保存">
-                <Download className="h-4 w-4" />
-              </Button>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="icon">
-                    <span className="sr-only">メニューを開く</span>
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={clearCanvas}>キャンバスをクリア</DropdownMenuItem>
-                  <DropdownMenuItem onClick={startGame}>AIとアイデア出し合いを開始</DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </>
-          ) : (
-            <>
-              {/* ゲームモード時の色ボタン */}
-              <div className="flex items-center gap-1 mr-2">
-                {Object.entries(COLORS).map(([colorName, colorClass]) => {
-                  const baseColorClass = typeof colorClass === "string" ? colorClass.split(" ")[0] : ""
-                  return (
-                    <Button
-                      key={colorName}
-                      variant="ghost"
-                      size="icon"
-                      className={`w-6 h-6 rounded-full p-0 border-2 ${baseColorClass} ${
-                        selectedColor === colorName ? "border-white" : "border-transparent"
-                      }`}
-                      onClick={() => {
-                        // ゲームモード時は色の選択のみ
-                        setSelectedColor(colorName)
-                      }}
-                      title={`${colorName}の付箋を選択`}
-                      disabled={gameState !== "user_turn"}
-                    />
-                  )
-                })}
-              </div>
-
-              {gameState === "user_turn" && (
-                <Button variant="outline" onClick={endUserTurn} className="bg-green-500 hover:bg-green-600 text-white">
-                  ターン終了
+                <Button variant="outline" size="icon" onClick={saveAsImage} title="画像として保存">
+                  <Download className="h-4 w-4" />
                 </Button>
-              )}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="icon">
+                      <span className="sr-only">メニューを開く</span>
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={clearCanvas}>キャンバスをクリア</DropdownMenuItem>
+                    <DropdownMenuItem onClick={startGame}>AIとアイデア出し合いを開始</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
+            ) : (
+              <>
+                {/* ゲームモード時の色ボタン */}
+                <div className="flex items-center gap-1 mr-2">
+                  {Object.entries(COLORS).map(([colorName, colorClass]) => {
+                    const baseColorClass = typeof colorClass === "string" ? colorClass.split(" ")[0] : ""
+                    return (
+                      <Button
+                        key={colorName}
+                        variant="ghost"
+                        size="icon"
+                        className={`w-6 h-6 rounded-full p-0 border-2 ${baseColorClass} ${
+                          selectedColor === colorName ? "border-white" : "border-transparent"
+                        }`}
+                        onClick={() => {
+                          handleColorButtonClick(colorName)
+                        }}
+                        title={`${colorName}の付箋を選択`}
+                        disabled={gameState !== "user_turn"}
+                      />
+                    )
+                  })}
+                </div>
 
-              <div className="flex items-center gap-1 ml-2">
-                <div
-                  className={`w-2 h-2 rounded-full ${gameState === "user_turn" ? "bg-green-500" : "bg-gray-500"}`}
-                ></div>
-                <User className="h-4 w-4" />
-                <span className="text-sm">{userId || "ユーザー"}</span>
-              </div>
+                {gameState === "user_turn" && (
+                  <Button variant="outline" onClick={endUserTurn} className="bg-green-500 hover:bg-green-600 text-white">
+                    ターン終了
+                  </Button>
+                )}
 
-              <div className="flex items-center gap-1 ml-2">
-                <div
-                  className={`w-2 h-2 rounded-full ${gameState === "ai_turn" ? "bg-green-500" : "bg-gray-500"}`}
-                ></div>
-                <Bot className="h-4 w-4" />
-                <span className="text-sm">AI</span>
-              </div>
-            </>
-          )}
-        </div>
-      </header>
+                <div className="flex items-center gap-1 ml-2">
+                  <div
+                    className={`w-2 h-2 rounded-full ${gameState === "user_turn" ? "bg-green-500" : "bg-gray-500"}`}
+                  ></div>
+                  <User className="h-4 w-4" />
+                  <span className="text-sm">{userId || "ユーザー"}</span>
+                </div>
+
+                <div className="flex items-center gap-1 ml-2">
+                  <div
+                    className={`w-2 h-2 rounded-full ${gameState === "ai_turn" ? "bg-green-500" : "bg-gray-500"}`}
+                  ></div>
+                  <Bot className="h-4 w-4" />
+                  <span className="text-sm">AI</span>
+                </div>
+              </>
+            )}
+          </div>
+        </header>
+      )}
 
       {/* ターン表示 */}
-      {gameState !== "idle" && (
+      {!isTestMode && gameState !== "idle" && (
         <div className="bg-gray-800 text-white p-2 flex justify-between items-center">
           <div className="flex items-center">
             <span className="font-medium mr-2">お題:</span>
@@ -1073,7 +1198,7 @@ export default function CollaborativeCanvas() {
       )}
 
       {/* ターンメッセージ */}
-      {turnMessage && (
+      {!isTestMode && turnMessage && (
         <Alert
           className={
             gameState === "user_turn" ? "bg-green-100" : gameState === "ai_turn" ? "bg-blue-100" : "bg-gray-100"
@@ -1095,6 +1220,67 @@ export default function CollaborativeCanvas() {
         </Alert>
       )}
 
+      {/* 付箋コントロールバー - すべてのモードで表示 */}
+      <div className="bg-white border-b p-2 flex flex-wrap items-center gap-2">
+        {/* 付箋追加コントロール */}
+        <div className="flex items-center">
+          <span className="mr-2 text-gray-700 text-sm">付箋を追加:</span>
+          <div className="flex space-x-1">
+            {Object.entries(COLORS).map(([colorName, colorClass]) => {
+              const baseColorClass = typeof colorClass === "string" ? colorClass.split(" ")[0] : "";
+              return (
+                <button
+                  key={colorName}
+                  className={`w-6 h-6 rounded-full border-2 ${baseColorClass} ${
+                    selectedColor === colorName ? "border-black" : "border-transparent"
+                  }`}
+                  onClick={() => {
+                    handleColorButtonClick(colorName);
+                  }}
+                  title={`${colorName}の付箋を追加`}
+                ></button>
+              );
+            })}
+          </div>
+        </div>
+        
+        {/* 他のコントロール */}
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            className="px-2 py-1 text-xs border rounded hover:bg-gray-100"
+            onClick={clearCanvas}
+          >
+            全消去
+          </button>
+          
+          <button
+            className="px-2 py-1 text-xs border rounded hover:bg-gray-100"
+            onClick={saveAsImage}
+          >
+            画像保存
+          </button>
+          
+          {!isTestMode && (
+            <button
+              className="px-2 py-1 text-xs border rounded bg-purple-100 hover:bg-purple-200"
+              onClick={() => {
+                if (userId && gameState === "user_turn") {
+                  setTurnCount(turnCount + 1);
+                  setGameState("ai_turn");
+                  setTurnMessage("AIの番です。AIがアイデアを生成しています...");
+                  handleAITurn();
+                } else if (!userId) {
+                  setIsIdDialogOpen(true);
+                }
+              }}
+              disabled={isAILoading || gameState === "ai_turn"}
+            >
+              AIの意見を聞く
+            </button>
+          )}
+        </div>
+      </div>
+      
       {/* キャンバス */}
       <div 
         ref={canvasWrapperRef}

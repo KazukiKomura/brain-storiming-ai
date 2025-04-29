@@ -20,7 +20,19 @@ const nextConfig = {
     webpackBuildWorker: true,
     parallelServerBuildTraces: true,
     parallelServerCompiles: true,
+    appDir: true,
   },
+  async rewrites() {
+    return [
+      {
+        source: '/api/:path*',
+        destination: 'http://backend:5000/api/:path*',
+      },
+    ];
+  },
+  reactStrictMode: true,
+  swcMinify: true,
+  output: "standalone",
 }
 
 mergeConfig(nextConfig, userConfig)
