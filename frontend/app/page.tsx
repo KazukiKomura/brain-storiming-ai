@@ -1,7 +1,7 @@
 "use client";
 
 import { useSession } from "@/lib/session-context";
-import CollaborativeCanvas from "@/components/collaborative-canvas";
+import Canvas from "@/components/brainstorming/Canvas";
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 
@@ -75,7 +75,7 @@ export default function Home() {
                   document.dispatchEvent(new CustomEvent('clearCanvas'));
                   // メッセージと状態をリセット
                   document.dispatchEvent(new CustomEvent('resetSessionState'));
-                  // キャンバスからのノートデータ取得はCollaborativeCanvasコンポーネント側で実装する必要があります
+                  // キャンバスからのノートデータ取得はCanvasコンポーネント側で実装する必要があります
                   // ここでは簡略化のため、保存せずに次のステップに進みます
                   goToState('session1');
                 }}
@@ -113,7 +113,7 @@ export default function Home() {
                 操作に慣れたら「本番セッション1へ進む」ボタンをクリックしてください。
               </p>
             </div>
-            <CollaborativeCanvas 
+            <Canvas 
               isTestMode={true}
               onSaveNotes={(notes) => saveSessionData('test', notes)}
             />
@@ -123,7 +123,7 @@ export default function Home() {
       case 'session1':
         return (
           <div className="flex flex-col min-h-screen">
-            <CollaborativeCanvas 
+            <Canvas 
               isTestMode={false}
               onSaveNotes={(notes) => saveSessionData('session1', notes)}
             />
@@ -133,7 +133,7 @@ export default function Home() {
       case 'session2':
         return (
           <div className="flex flex-col min-h-screen">
-            <CollaborativeCanvas 
+            <Canvas 
               isTestMode={false}
               currentState="session2"
               onSaveNotes={(notes) => saveSessionData('session2', notes)}

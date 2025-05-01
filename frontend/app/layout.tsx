@@ -1,6 +1,7 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import { SessionProvider } from "@/lib/session-context";
+import { CanvasProvider } from "@/contexts/CanvasContext";
 
 export const metadata: Metadata = {
   title: "ブレインストーミングAIシステム",
@@ -16,7 +17,9 @@ export default function RootLayout({
     <html lang="ja">
       <body>
         <SessionProvider>
-          {children}
+          <CanvasProvider>
+            {children}
+          </CanvasProvider>
         </SessionProvider>
       </body>
     </html>
