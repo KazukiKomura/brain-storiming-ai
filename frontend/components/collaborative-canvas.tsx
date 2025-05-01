@@ -156,7 +156,7 @@ const AI_COLOR_GROUPS = {
 }
 
 // ゲームの状態を表す型
-type GameState = "idle" | "waiting_for_id" | "topic_selection" | "user_turn" | "ai_turn"
+type GameState = "idle" | "waiting_for_id" | "topic_selection" | "user_turn" | "ai_turn" | "transitioning"
 
 // プロパティタイプの定義を更新
 interface CollaborativeCanvasProps {
@@ -365,6 +365,9 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes, c
     
     // ユーザーが3回終了したら、次のセッションへ
     if (newUserTurnCount >= 3) {
+      // すぐに移行中状態に変更して入力を防止
+      setGameState("transitioning");
+      
       // 完了メッセージを表示
       setTurnMessage(`素晴らしい！3つのアイデアを出していただきありがとうございます。次のセッションに移ります...`);
       
@@ -576,7 +579,7 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes, c
   // キャンバス上のクリックイベント処理
   const addNote = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
     // ユーザーターンでない場合は処理しない
-    if (gameState !== "user_turn" && !isTestMode) {
+    if ((gameState !== "user_turn" && !isTestMode) || gameState === "transitioning") {
       console.log("現在はユーザーのターンではないため、付箋を追加できません");
       return;
     }
@@ -842,7 +845,7 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes, c
   // 色ボタンでの付箋追加処理
   const handleColorButtonClick = (colorName: string) => {
     // ユーザーターンでない場合は処理しない
-    if (gameState !== "user_turn" && !isTestMode) {
+    if ((gameState !== "user_turn" && !isTestMode) || gameState === "transitioning") {
       console.log("現在はユーザーのターンではないため、付箋を追加できません");
       return;
     }
