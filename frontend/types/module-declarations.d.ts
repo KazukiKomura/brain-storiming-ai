@@ -1,0 +1,12 @@
+declare module 'react';
+declare module 'lucide-react';
+declare module '@/components/ui/button';
+declare module '@/components/ui/dropdown-menu';
+declare module '@/components/ui/input';
+declare module '@/components/ui/dialog';
+declare module '@/components/ui/tooltip';
+declare module '@/components/ui/alert';
+declare module '@/components/sticky-note';
+declare module '@/components/color-palette';
+declare module '@/lib/api';
+declare module '@/lib/session-context'; 

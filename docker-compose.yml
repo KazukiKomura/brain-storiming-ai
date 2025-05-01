@@ -1,27 +1,32 @@
-version: '3.8'
+version: '3'
 
 services:
-  app:
+  frontend:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ./frontend
     ports:
       - "3000:3000"
     volumes:
-      - ./frontend/app:/app/app
-      - ./frontend/components:/app/components
-      - ./frontend/lib:/app/lib
-      - ./frontend/hooks:/app/hooks
-      - ./frontend/styles:/app/styles
-      - ./frontend/public:/app/public
-      - ./frontend/package.json:/app/package.json
-      - ./frontend/pnpm-lock.yaml:/app/pnpm-lock.yaml
-      - ./frontend/next.config.mjs:/app/next.config.mjs
-      - ./frontend/tailwind.config.ts:/app/tailwind.config.ts
-      - ./frontend/postcss.config.mjs:/app/postcss.config.mjs
-      - ./frontend/tsconfig.json:/app/tsconfig.json
-      - ./frontend/components.json:/app/components.json
+      - ./frontend:/app
+      - /app/node_modules
     environment:
-      - NODE_ENV=development
-      - NEXT_TELEMETRY_DISABLED=1
-    command: pnpm dev
+      - NEXT_PUBLIC_API_URL=http://backend:5001/api
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

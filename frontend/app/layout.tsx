@@ -1,20 +1,27 @@
-import type { Metadata } from 'next'
-import './globals.css'
+import "./globals.css";
+import type { Metadata } from "next";
+import { SessionProvider } from "@/lib/session-context";
+import { CanvasProvider } from "@/contexts/CanvasContext";
 
 export const metadata: Metadata = {
-  title: 'v0 App',
-  description: 'Created with v0',
-  generator: 'v0.dev',
-}
+  title: "ブレインストーミングAIシステム",
+  description: "研究用ブレインストーミングシステム",
+};
 
 export default function RootLayout({
   children,
 }: Readonly<{
-  children: React.ReactNode
+  children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="ja">
+      <body>
+        <SessionProvider>
+          <CanvasProvider>
+            {children}
+          </CanvasProvider>
+        </SessionProvider>
+      </body>
     </html>
-  )
+  );
 }
