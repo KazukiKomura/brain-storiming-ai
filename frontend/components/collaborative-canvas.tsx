@@ -20,8 +20,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import StickyNote from "@/components/sticky-note"
 import ColorPalette from "@/components/color-palette"
-import html2canvas from "html2canvas"
 import { notesApi } from "@/lib/api"
+import { useSession } from "@/lib/session-context"
 
 // 付箋のタイプ定義
 export type Note = {
@@ -162,9 +162,10 @@ type GameState = "idle" | "waiting_for_id" | "topic_selection" | "user_turn" | "
 interface CollaborativeCanvasProps {
   isTestMode?: boolean;
   onSaveNotes?: (notes: Note[]) => void;
+  currentState?: 'initial' | 'video' | 'test' | 'session1' | 'session2' | 'survey';
 }
 
-export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }: CollaborativeCanvasProps) {
+export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes, currentState = 'session1' }: CollaborativeCanvasProps) {
   const [notes, setNotes] = useState<Note[]>([])
   const [selectedColor, setSelectedColor] = useState<string>("yellow")
   const [canvasTitle, setCanvasTitle] = useState<string>("コラボレーティブキャンバス")
@@ -177,6 +178,8 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
   const [gameState, setGameState] = useState<GameState>("idle")
   const [turnMessage, setTurnMessage] = useState<string>("")
   const [turnCount, setTurnCount] = useState<number>(0)
+  const [aiTurnCount, setAiTurnCount] = useState<number>(0)
+  const [userTurnCount, setUserTurnCount] = useState<number>(0)
   const [gridCells, setGridCells] = useState<Array<Array<boolean>>>(
     Array(GRID_ROWS).fill(0).map(() => Array(GRID_COLS).fill(false))
   ) // グリッドのセルの占有状態を管理
@@ -191,6 +194,9 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
   const canvasRef = useRef<HTMLDivElement>(null)
   const canvasWrapperRef = useRef<HTMLDivElement>(null)
   const userIdInputRef = useRef<HTMLInputElement>(null)
+  
+  // useSessionフックを使用して、goToState関数を取得
+  const { goToState } = useSession()
 
   // セッションタイプに応じたデフォルトのタイトル設定
   useEffect(() => {
@@ -198,8 +204,25 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
       setCanvasTitle("テストセッション");
     } else {
       setCanvasTitle("ブレインストーミングセッション");
+      
+      // テストモードでなければ（本番セッションなら）自動的にAIターンを開始
+      if (gameState === "idle") {
+        // ユーザーIDが設定済みであれば自動的にAIターンに移行
+        if (userId) {
+          setGameState("ai_turn");
+          setTurnMessage("AIの番です。AIがアイデアを生成しています...");
+          setTimeout(() => {
+            handleAITurn();
+          }, 1000);
+        }
+        // IDが設定されていなければID入力ダイアログを表示
+        else {
+          setIsIdDialogOpen(true);
+        }
+      }
     }
-  }, [isTestMode]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTestMode, userId, gameState]);
 
   // ノートが変更されたときの処理
   useEffect(() => {
@@ -309,6 +332,15 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
       setIsIdDialogOpen(false)
       selectRandomTopic()
       setGameState("topic_selection")
+      
+      // トピック選択後、AIターンを自動的に開始
+      setTimeout(() => {
+        setGameState("ai_turn")
+        setTurnMessage("AIの番です。AIがアイデアを生成しています...")
+        setTimeout(() => {
+          handleAITurn()
+        }, 1000)
+      }, 1500)
     }
   }
 
@@ -327,28 +359,94 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
 
   // ユーザーのターンを終了
   const endUserTurn = () => {
-    setTurnCount(turnCount + 1)
-    setGameState("ai_turn")
-    setTurnMessage("AIの番です。AIがアイデアを考えています...")
+    const newUserTurnCount = userTurnCount + 1;
+    setUserTurnCount(newUserTurnCount);
+    setTurnCount(turnCount + 1);
+    
+    // ユーザーが3回終了したら、次のセッションへ
+    if (newUserTurnCount >= 3) {
+      // 完了メッセージを表示
+      setTurnMessage(`素晴らしい！3つのアイデアを出していただきありがとうございます。次のセッションに移ります...`);
+      
+      console.log("セッション完了: 3ターン終了");
+      console.log("現在のセッション:", currentState);
+      
+      // 3回終了したので、セッションを完了して次へ
+      setTimeout(() => {
+        console.log("次のセッションへ移行します");
+        
+        // 保存してからセッション移行
+        if (onSaveNotes) {
+          console.log("ノートを保存中...");
+          onSaveNotes(notes);
+        }
+        
+        // 現在のセッションに応じて次のステップへ
+        let nextState = "";
+        
+        if (isTestMode) {
+          // テストモードの場合はセッション1へ
+          console.log("テストモードからセッション1へ移行");
+          nextState = 'session1';
+        } else if (currentState === "session1") {
+          // セッション1の場合はセッション2へ
+          console.log("セッション1からセッション2へ移行");
+          nextState = 'session2';
+        } else if (currentState === "session2") {
+          // セッション2の場合はサーベイへ
+          console.log("セッション2からサーベイへ移行");
+          nextState = 'survey';
+        }
+        
+        // 最初にキャンバスとセッション状態をリセット
+        console.log("キャンバスをクリアして状態をリセット");
+        // キャンバスをクリア
+        document.dispatchEvent(new CustomEvent('clearCanvas'));
+        // メッセージと状態をリセット
+        document.dispatchEvent(new CustomEvent('resetSessionState'));
+        
+        // リセット後に次のセッションへ遷移
+        setTimeout(() => {
+          console.log(`次のセッション(${nextState})へ遷移します`);
+          goToState(nextState);
+          
+          // セッション2に遷移した場合、少し遅らせてからセットアップを開始
+          if (nextState === 'session1' || nextState === 'session2') {
+            setTimeout(() => {
+              console.log("新しいセッションのセットアップを開始");
+              // 新しいセッションで最初のステップを開始
+              setUserIdAndContinue();
+            }, 500);
+          }
+        }, 500);
+        
+      }, 3000);  // 3秒後に移行処理を実行
+      
+      return;
+    }
+    
+    // 通常のターン切り替え
+    setGameState("ai_turn");
+    setTurnMessage("AIの番です。AIがアイデアを考えています...");
 
     // AIのターンをシミュレート
     setTimeout(() => {
-      handleAITurn()
-    }, 1500)
+      handleAITurn();
+    }, 1500);
   }
 
   // AIのターン処理
   const handleAITurn = async () => {
-    setIsAILoading(true)
+    setIsAILoading(true);
 
     try {
       // バックエンドとの通信をシミュレート
-      await new Promise((resolve) => setTimeout(resolve, 1500))
+      await new Promise((resolve) => setTimeout(resolve, 1500));
 
       if (canvasRef.current) {
-        // 1〜2個のランダムな付箋を生成
-        const numNotes = Math.floor(Math.random() * 2) + 1
-        const newNotes: Note[] = []
+        // シナリオに合わせて常に3つの付箋を生成する
+        const numNotes = 3;
+        const newNotes: Note[] = [];
 
         // グリッドの左上を優先するために行と列のインデックスを準備
         const allRows = Array.from({ length: GRID_ROWS }, (_, i) => i);
@@ -356,19 +454,19 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
 
         for (let i = 0; i < numNotes; i++) {
           // 現在のお題に関連するコンテンツを選択
-          let content = "AIのアイデア"
+          let content = "AIのアイデア";
           if (AI_GENERATED_CONTENTS[currentTopic as keyof typeof AI_GENERATED_CONTENTS]) {
-            const contentArray = AI_GENERATED_CONTENTS[currentTopic as keyof typeof AI_GENERATED_CONTENTS]
-            const contentIndex = Math.floor(Math.random() * contentArray.length)
-            content = contentArray[contentIndex]
+            const contentArray = AI_GENERATED_CONTENTS[currentTopic as keyof typeof AI_GENERATED_CONTENTS];
+            const contentIndex = Math.floor(Math.random() * contentArray.length);
+            content = contentArray[contentIndex];
           }
 
           // コンテンツに基づいて色を選択
-          let color = "blue" // デフォルト色
+          let color = "blue"; // デフォルト色
           for (const [category, categoryColor] of Object.entries(AI_COLOR_GROUPS)) {
             if (content.includes(category)) {
-              color = categoryColor
-              break
+              color = categoryColor;
+              break;
             }
           }
           
@@ -378,7 +476,7 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
           // 色に対応する列を見つける
           const possibleCols = Object.entries(GRID_COLORS)
             .filter(([_, colorName]) => colorName === color)
-            .map(([colIndex]) => parseInt(colIndex))
+            .map(([colIndex]) => parseInt(colIndex));
           
           if (possibleCols.length === 0) continue;
           
@@ -394,8 +492,8 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
                 foundCell = true;
                 
                 // 実際の座標を計算（グリッドのセルの中央に配置）
-                const posX = col * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2
-                const posY = row * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2
+                const posX = col * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2;
+                const posY = row * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2;
 
                 newNotes.push({
                   id: `ai-${Date.now()}-${i}`,
@@ -405,12 +503,12 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
                   zIndex: highestZIndex + i + 1,
                   gridPosition: { row, col },
                   creator: 'ai'
-                })
+                });
 
                 // グリッドの占有状態を更新
-                const newGridCells = [...gridCells]
-                newGridCells[row][col] = true
-                setGridCells(newGridCells)
+                const newGridCells = [...gridCells];
+                newGridCells[row][col] = true;
+                setGridCells(newGridCells);
                 
                 break; // 空きセルが見つかったらこの列の探索を終了
               }
@@ -431,8 +529,8 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
                   foundCell = true;
                   
                   // 実際の座標を計算
-                  const posX = col * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2
-                  const posY = row * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2
+                  const posX = col * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2;
+                  const posY = row * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2;
 
                   newNotes.push({
                     id: `ai-${Date.now()}-${i}`,
@@ -442,12 +540,12 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
                     zIndex: highestZIndex + i + 1,
                     gridPosition: { row, col },
                     creator: 'ai'
-                  })
+                  });
 
                   // グリッドの占有状態を更新
-                  const newGridCells = [...gridCells]
-                  newGridCells[row][col] = true
-                  setGridCells(newGridCells)
+                  const newGridCells = [...gridCells];
+                  newGridCells[row][col] = true;
+                  setGridCells(newGridCells);
                   break;
                 }
               }
@@ -456,25 +554,33 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
           }
         }
 
-        setNotes([...notes, ...newNotes])
-        setHighestZIndex(highestZIndex + newNotes.length)
+        setNotes([...notes, ...newNotes]);
+        setHighestZIndex(highestZIndex + newNotes.length);
       }
     } catch (error) {
-      console.error("AIターンエラー:", error)
+      console.error("AIターンエラー:", error);
     } finally {
-      setIsAILoading(false)
-
-      // ターンを終了し、ユーザーのターンに戻る
-      setTimeout(() => {
-        setTurnCount(turnCount + 1)
-        setGameState("user_turn")
-        setTurnMessage(`${userId}さんの番です。アイデアを付箋に書いてください。`)
-      }, 1000)
+      setIsAILoading(false);
+      
+      // AIのターンカウントを更新
+      const newAiTurnCount = aiTurnCount + 1;
+      setAiTurnCount(newAiTurnCount);
+      setTurnCount(turnCount + 1);
+      
+      // AIが3回終了したら、次のセッションへの準備は行わず、ユーザーのターンに戻す
+      setGameState("user_turn");
+      setTurnMessage(`${userId}さんの番です。3つのアイデアを付箋に書いてください。`);
     }
   }
 
   // キャンバス上のクリックイベント処理
   const addNote = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
+    // ユーザーターンでない場合は処理しない
+    if (gameState !== "user_turn" && !isTestMode) {
+      console.log("現在はユーザーのターンではないため、付箋を追加できません");
+      return;
+    }
+
     // イベントがキャンバスから直接発生したことを確認
     if (e.currentTarget !== canvasRef.current) return;
 
@@ -640,181 +746,7 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
 
   // キャンバスを画像として保存する関数
   const saveAsImage = async () => {
-    if (canvasRef.current) {
-      try {
-        const canvas = await html2canvas(canvasRef.current)
-        const image = canvas.toDataURL("image/png")
-        const link = document.createElement("a")
-        link.href = image
-        link.download = `${canvasTitle || "collaborative-canvas"}.png`
-        link.click()
-      } catch (error) {
-        console.error("Error saving canvas:", error)
-      }
-    }
-  }
-
-  // AIによる付箋生成
-  const handleAIAddNotes = async () => {
-    if (isAILoading) return
-    
-    try {
-      setIsAILoading(true)
-      
-      // AIに付箋を生成させる
-      const result = await notesApi.generateAINotes(canvasTitle, 3, notes)
-      
-      if (!result.success) {
-        console.error('AI付箋生成エラー')
-        return
-      }
-      
-      const aiNotes = result.notes
-      const newNotes: Note[] = []
-      
-      // 生成された付箋を画面に追加
-      for (const aiNote of aiNotes) {
-        let foundCell = false
-        
-        // 該当する色のグリッド列を探す
-        const colorIndex = Object.keys(COLORS).indexOf(aiNote.color)
-        const possibleCols = colorIndex >= 0 ? [colorIndex] : Object.keys(GRID_COLORS).map(Number)
-        
-        // 左上から順に探索
-        for (let row = 0; row < GRID_ROWS && !foundCell; row++) {
-          for (const col of possibleCols) {
-            // セルが空いているかチェック
-            if (!gridCells[row][col]) {
-              foundCell = true;
-              
-              // 実際の座標を計算
-              const posX = col * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2;
-              const posY = row * GRID_SIZE + (GRID_SIZE - NOTE_SIZE) / 2;
-
-              newNotes.push({
-                id: aiNote.id,
-                content: aiNote.content,
-                position: { x: posX, y: posY },
-                color: aiNote.color,
-                zIndex: highestZIndex + newNotes.length + 1,
-                gridPosition: { row, col },
-                creator: 'ai' // AI生成であることを明示
-              });
-
-              // グリッドの占有状態を更新
-              const newGridCells = [...gridCells];
-              newGridCells[row][col] = true;
-              setGridCells(newGridCells);
-              
-              break; // 空きセルが見つかったらこの列の探索を終了
-            }
-          }
-          if (foundCell) break; // 空きセルが見つかったら行の探索も終了
-        }
-      }
-      
-      // 新しい付箋を既存の付箋に追加
-      if (newNotes.length > 0) {
-        const combinedNotes = [...notes, ...newNotes];
-        setNotes(combinedNotes);
-        setHighestZIndex(highestZIndex + newNotes.length);
-        
-        // AI生成後に全ての付箋情報をバックエンドに保存
-        try {
-          // 保存用のデータを作成
-          const allNotesData = combinedNotes.map(note => ({
-            id: note.id,
-            content: note.content,
-            gridPosition: note.gridPosition,
-            creator: note.creator || (note.id.startsWith('ai-') ? 'ai' : 'user')
-          }));
-          
-          // 最初のAI生成付箋のIDを使用して保存
-          const firstAINote = newNotes[0];
-          await notesApi.saveNoteContent(
-            firstAINote.id, 
-            firstAINote.content, 
-            firstAINote.gridPosition, 
-            allNotesData,
-            'ai'
-          );
-          
-          console.log(`AI生成付箋と全ての付箋情報を保存しました（${allNotesData.length}個）`);
-        } catch (error) {
-          console.error('AI生成付箋の保存エラー:', error);
-        }
-      }
-      
-    } catch (error) {
-      console.error('AI付箋生成エラー:', error)
-    } finally {
-      setIsAILoading(false)
-    }
-  }
-
-  // AIによる付箋整理のシミュレーション
-  const handleAIOrganizeNotes = async () => {
-    if (notes.length < 2) {
-      alert("整理するには少なくとも2つの付箋が必要です。")
-      return
-    }
-
-    setIsAILoading(true)
-
-    try {
-      // バックエンドとの通信をシミュレート
-      await new Promise((resolve) => setTimeout(resolve, 2000))
-
-      if (canvasRef.current) {
-        const rect = canvasRef.current.getBoundingClientRect()
-        const width = rect.width
-        const height = rect.height
-
-        // 付箋をグループ化（デモのため、単純に色でグループ化）
-        const groupedNotes: Record<string, Note[]> = {}
-
-        notes.forEach((note) => {
-          if (!groupedNotes[note.color]) {
-            groupedNotes[note.color] = []
-          }
-          groupedNotes[note.color].push(note)
-        })
-
-        // グループごとに配置
-        const updatedNotes: Note[] = []
-        let groupIndex = 0
-
-        for (const [color, colorNotes] of Object.entries(groupedNotes)) {
-          // グループの開始位置を計算
-          const groupX = 100 + ((groupIndex * 300) % (width - 200))
-          const groupY = 100 + Math.floor((groupIndex * 300) / (width - 200)) * 300
-
-          // グループ内の付箋を配置
-          colorNotes.forEach((note, noteIndex) => {
-            const row = Math.floor(noteIndex / 3)
-            const col = noteIndex % 3
-
-            updatedNotes.push({
-              ...note,
-              position: {
-                x: groupX + col * 160,
-                y: groupY + row * 160,
-              },
-              zIndex: highestZIndex + updatedNotes.length + 1,
-            })
-          })
-
-          groupIndex++
-        }
-
-        setNotes(updatedNotes)
-        setHighestZIndex(highestZIndex + updatedNotes.length)
-      }
-    } catch (error) {
-      console.error("AI付箋整理エラー:", error)
-    } finally {
-      setIsAILoading(false)
-    }
+    // 削除されました
   }
 
   // タッチデバイスの検出
@@ -909,6 +841,12 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
 
   // 色ボタンでの付箋追加処理
   const handleColorButtonClick = (colorName: string) => {
+    // ユーザーターンでない場合は処理しない
+    if (gameState !== "user_turn" && !isTestMode) {
+      console.log("現在はユーザーのターンではないため、付箋を追加できません");
+      return;
+    }
+
     setSelectedColor(colorName);
     // 最初の空きセルを探す
     const col = COLOR_COLUMNS[colorName as keyof typeof COLOR_COLUMNS];
@@ -958,6 +896,39 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
     };
   }, []);
 
+  // セッション状態をリセットするイベントリスナー
+  useEffect(() => {
+    const handleResetSessionStateEvent = () => {
+      // 付箋とグリッド状態はclearCanvasイベントでリセットされるので、
+      // その他の状態をここでリセット
+      setTurnCount(0);
+      setAiTurnCount(0);
+      setUserTurnCount(0);
+      setGameState("idle");
+      setTurnMessage("");
+      setCurrentTopic("");
+      
+      // セッションに応じたタイトルを設定
+      if (isTestMode) {
+        setCanvasTitle("テストセッション");
+      } else if (currentState === "session1") {
+        setCanvasTitle("本番セッション1");
+      } else if (currentState === "session2") {
+        setCanvasTitle("本番セッション2");
+      } else {
+        setCanvasTitle("ブレインストーミングセッション");
+      }
+      
+      console.log("セッション状態をリセットしました:", currentState);
+    };
+    
+    document.addEventListener('resetSessionState', handleResetSessionStateEvent);
+    
+    return () => {
+      document.removeEventListener('resetSessionState', handleResetSessionStateEvent);
+    };
+  }, [isTestMode, currentState]);
+
   return (
     <div className="flex flex-col h-screen w-full">
       {/* ID入力ダイアログ */}
@@ -998,8 +969,7 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
               />
             ) : (
               <h1
-                className={`text-xl font-bold ${gameState === "idle" ? "cursor-pointer" : ""}`}
-                onClick={() => gameState === "idle" && setIsEditingTitle(true)}
+                className="text-xl font-bold"
               >
                 {canvasTitle}
               </h1>
@@ -1008,129 +978,7 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
           <div className="flex items-center gap-2">
             {gameState === "idle" ? (
               <>
-                {/* 色ボタン - 付箋追加用 */}
-                <div className="flex items-center gap-1 mr-2">
-                  {Object.entries(COLORS).map(([colorName, colorClass]) => {
-                    const baseColorClass = typeof colorClass === "string" ? colorClass.split(" ")[0] : ""
-                    return (
-                      <Button
-                        key={colorName}
-                        variant="ghost"
-                        size="icon"
-                        className={`w-6 h-6 rounded-full p-0 border-2 ${baseColorClass} ${
-                          selectedColor === colorName ? "border-white" : "border-transparent"
-                        }`}
-                        onClick={() => {
-                          handleColorButtonClick(colorName)
-                        }}
-                        title={`${colorName}の付箋を追加`}
-                      />
-                    )
-                  })}
-                </div>
-
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        onClick={handleAIAddNotes}
-                        disabled={isAILoading}
-                        className="bg-purple-500 hover:bg-purple-600 text-white"
-                      >
-                        {isAILoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>AIによる付箋追加</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        onClick={handleAIOrganizeNotes}
-                        disabled={isAILoading}
-                        className="bg-blue-500 hover:bg-blue-600 text-white"
-                      >
-                        {isAILoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <LayoutGrid className="h-4 w-4" />}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>AIによる付箋整理</p>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <Button variant="outline" size="icon" title="ヘルプ">
-                      <HelpCircle className="h-4 w-4" />
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>使い方</DialogTitle>
-                      <DialogDescription>このアプリケーションの基本的な操作方法です</DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-4 mt-4">
-                      <div>
-                        <h3 className="font-medium">付箋の追加</h3>
-                        <p className="text-sm text-muted-foreground">
-                          上部の色ボタンをクリックすると、その色の付箋が追加されます。
-                        </p>
-                      </div>
-                      <div>
-                        <h3 className="font-medium">付箋の編集</h3>
-                        <p className="text-sm text-muted-foreground">
-                          付箋のテキスト部分をクリック/タップすると編集モードになります。編集が終わったら「完了」ボタンをクリックしてください。
-                        </p>
-                      </div>
-                      <div>
-                        <h3 className="font-medium">付箋の色変更</h3>
-                        <p className="text-sm text-muted-foreground">
-                          付箋内のパレットアイコンをクリックすると色を変更できます。
-                        </p>
-                      </div>
-                      <div>
-                        <h3 className="font-medium">AI機能</h3>
-                        <p className="text-sm text-muted-foreground">
-                          <span className="inline-flex items-center mr-1">
-                            <Sparkles className="h-3 w-3 mr-1" /> ボタン
-                          </span>
-                          : AIがアイデアを生成し、自動的に付箋を追加します。
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          <span className="inline-flex items-center mr-1">
-                            <LayoutGrid className="h-3 w-3 mr-1" /> ボタン
-                          </span>
-                          : AIが既存の付箋を意味的に整理し、グループ化します。
-                        </p>
-                      </div>
-                    </div>
-                  </DialogContent>
-                </Dialog>
-
-                <Button variant="outline" size="icon" onClick={saveAsImage} title="画像として保存">
-                  <Download className="h-4 w-4" />
-                </Button>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="icon">
-                      <span className="sr-only">メニューを開く</span>
-                      <Plus className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={clearCanvas}>キャンバスをクリア</DropdownMenuItem>
-                    <DropdownMenuItem onClick={startGame}>AIとアイデア出し合いを開始</DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                {/* 色ボタン - 付箋追加用 - 削除 */}
               </>
             ) : (
               <>
@@ -1190,9 +1038,17 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
             <span className="font-medium mr-2">お題:</span>
             <span>{currentTopic}</span>
           </div>
-          <div className="flex items-center">
-            <span className="font-medium mr-2">ターン:</span>
-            <span>{turnCount}</span>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center">
+              <User className="h-4 w-4 mr-1" />
+              <span className="font-medium mr-1">ユーザーターン:</span>
+              <span>{userTurnCount}</span>
+            </div>
+            <div className="flex items-center">
+              <Bot className="h-4 w-4 mr-1" />
+              <span className="font-medium mr-1">AIターン:</span>
+              <span>{aiTurnCount}</span>
+            </div>
           </div>
         </div>
       )}
@@ -1220,8 +1076,8 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
         </Alert>
       )}
 
-      {/* 付箋コントロールバー - すべてのモードで表示 */}
-      <div className="bg-white border-b p-2 flex flex-wrap items-center gap-2">
+      {/* 付箋コントロールバー - シンプル化 */}
+      <div className="bg-white border-b p-2 flex flex-wrap items-center">
         {/* 付箋追加コントロール */}
         <div className="flex items-center">
           <span className="mr-2 text-gray-700 text-sm">付箋を追加:</span>
@@ -1244,38 +1100,15 @@ export default function CollaborativeCanvas({ isTestMode = false, onSaveNotes }:
           </div>
         </div>
         
-        {/* 他のコントロール */}
+        {/* 他のコントロール - 全て削除 */}
         <div className="ml-auto flex items-center gap-2">
-          <button
-            className="px-2 py-1 text-xs border rounded hover:bg-gray-100"
-            onClick={clearCanvas}
-          >
-            全消去
-          </button>
-          
-          <button
-            className="px-2 py-1 text-xs border rounded hover:bg-gray-100"
-            onClick={saveAsImage}
-          >
-            画像保存
-          </button>
-          
-          {!isTestMode && (
+          {gameState === "user_turn" && (
             <button
-              className="px-2 py-1 text-xs border rounded bg-purple-100 hover:bg-purple-200"
-              onClick={() => {
-                if (userId && gameState === "user_turn") {
-                  setTurnCount(turnCount + 1);
-                  setGameState("ai_turn");
-                  setTurnMessage("AIの番です。AIがアイデアを生成しています...");
-                  handleAITurn();
-                } else if (!userId) {
-                  setIsIdDialogOpen(true);
-                }
-              }}
-              disabled={isAILoading || gameState === "ai_turn"}
+              className="px-2 py-1 text-xs border rounded bg-green-500 hover:bg-green-600 text-white"
+              onClick={endUserTurn}
+              disabled={isAILoading}
             >
-              AIの意見を聞く
+              アイデアを確定する
             </button>
           )}
         </div>
